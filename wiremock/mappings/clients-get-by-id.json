@@ -1,0 +1,23 @@
+{
+  "name": "clients-get-by-id",
+  "priority": 5,
+  "request": {
+    "method": "GET",
+    "urlPathPattern": "/clients/[A-Z0-9]{6,20}"
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "Content-Type": "application/json"
+    },
+    "jsonBody": {
+      "clientId": "{{request.pathSegments.[1]}}",
+      "name": "WireMock Simulated Client",
+      "document": "12345678910",
+      "documentType": "CPF",
+      "active": true,
+      "createdAt": "2026-05-09T10:00:00Z"
+    },
+    "transformers": ["response-template"]
+  }
+}

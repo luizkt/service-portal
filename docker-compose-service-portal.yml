@@ -1,0 +1,468 @@
+# =============================================================================
+# docker-compose.yml — Portal de Orquestração
+# =============================================================================
+#
+# Ordem de inicialização garantida por healthchecks:
+#
+#   postgresql ──healthy──► authentik-server ──healthy──┐
+#              └──healthy──► authentik-worker            │
+#   mongodb    ──healthy──► manager ──healthy──┐         │
+#                                              │         ▼
+#   rabbitmq   ──healthy──┐                    │
+#   kafka      ──healthy──┼──► orchestrator ──healthy──► bff ──healthy──► frontend
+#   redis      ──healthy──┤   (consome /manager/workflows; cacheia em Redis 1h)
+#   wiremock   ──healthy──┘   (simulador de APIs externas — ex.: api.exemplo.com)
+#
+# Recursos estimados em regime: ~3 GB RAM  |  ~4 GB de imagens
+# Requisitos mínimos recomendados: 6 GB RAM livres, 4 CPUs, 10 GB disco livre
+#
+# Primeiro uso:
+#   1. cp env.example .env
+#   2. Gere as chaves obrigatórias:
+#        echo "PG_PASS=$(openssl rand -base64 36 | tr -d '\n')" >> .env
+#        echo "AUTHENTIK_SECRET_KEY=$(openssl rand -base64 60 | tr -d '\n')" >> .env
+#        echo "ORCHESTRATOR_JWT_SECRET=$(openssl rand -base64 60 | tr -d '\n')" >> .env
+#   3. docker compose up -d
+#   4. http://localhost:9000/if/flow/initial-setup/ → crie o admin Authentik
+#   5. Crie uma aplicação OAuth2/OIDC Provider no Authentik
+#        Admin → Applications → Providers → Create → OAuth2/OIDC Provider
+#        Em seguida: Applications → Create → vincule ao Provider
+#        Anote o Application Slug (ex: service-portal)
+#   6. Defina AUTHENTIK_APP_SLUG=<seu-slug> no .env
+#   7. docker compose restart bff
+#
+# =============================================================================
+
+services:
+
+  # ---------------------------------------------------------------------------
+  # PostgreSQL — banco de dados do Authentik
+  # ---------------------------------------------------------------------------
+  postgresql:
+    image: docker.io/library/postgres:16-alpine
+    container_name: portal-postgresql
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -d $${POSTGRES_DB} -U $${POSTGRES_USER}"]
+      start_period: 10s
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    environment:
+      POSTGRES_PASSWORD: ${PG_PASS:?Defina PG_PASS no .env}
+      POSTGRES_USER:     ${PG_USER:-authentik}
+      POSTGRES_DB:       ${PG_DB:-authentik}
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+    networks:
+      - portal
+
+  # ---------------------------------------------------------------------------
+  # Authentik Server — IdP, autenticação, emissão de tokens OIDC
+  #
+  # Healthcheck via Python puro (wget/curl não existem na imagem Authentik).
+  # start_period generoso: migrations podem demorar no primeiro boot.
+  # ---------------------------------------------------------------------------
+  authentik-server:
+    image: ghcr.io/goauthentik/server:2026.2.1
+    container_name: portal-authentik-server
+    restart: unless-stopped
+    command: server
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - |
+          python3 -c "
+          import urllib.request, sys
+          try:
+            urllib.request.urlopen('http://localhost:9000/-/health/ready/', timeout=5)
+            sys.exit(0)
+          except Exception:
+            sys.exit(1)
+          "
+      start_period: 60s
+      interval: 20s
+      timeout: 10s
+      retries: 5
+    environment:
+      AUTHENTIK_SECRET_KEY:           ${AUTHENTIK_SECRET_KEY:?Defina AUTHENTIK_SECRET_KEY no .env}
+      AUTHENTIK_POSTGRESQL__HOST:     postgresql
+      AUTHENTIK_POSTGRESQL__USER:     ${PG_USER:-authentik}
+      AUTHENTIK_POSTGRESQL__NAME:     ${PG_DB:-authentik}
+      AUTHENTIK_POSTGRESQL__PASSWORD: ${PG_PASS}
+      AUTHENTIK_LOG_LEVEL:            info
+      # Email — descomente para habilitar recuperação de senha e alertas
+      # AUTHENTIK_EMAIL__HOST:        smtp.example.com
+      # AUTHENTIK_EMAIL__PORT:        587
+      # AUTHENTIK_EMAIL__USE_TLS:     "true"
+      # AUTHENTIK_EMAIL__USERNAME:    noreply@example.com
+      # AUTHENTIK_EMAIL__PASSWORD:    ""
+      # AUTHENTIK_EMAIL__FROM:        noreply@example.com
+    volumes:
+      - authentik_media:/media
+      - authentik_templates:/templates
+    ports:
+      - "${AUTHENTIK_PORT_HTTP:-9000}:9000"
+      - "${AUTHENTIK_PORT_HTTPS:-9443}:9443"
+    depends_on:
+      postgresql:
+        condition: service_healthy
+    networks:
+      - portal
+
+  # ---------------------------------------------------------------------------
+  # Authentik Worker — tarefas em background (emails, eventos, outposts)
+  # ---------------------------------------------------------------------------
+  authentik-worker:
+    image: ghcr.io/goauthentik/server:2026.2.1
+    container_name: portal-authentik-worker
+    restart: unless-stopped
+    command: worker
+    user: root
+    healthcheck:
+      test: ["CMD", "ak", "healthcheck"]
+      start_period: 30s
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    environment:
+      AUTHENTIK_SECRET_KEY:           ${AUTHENTIK_SECRET_KEY}
+      AUTHENTIK_POSTGRESQL__HOST:     postgresql
+      AUTHENTIK_POSTGRESQL__USER:     ${PG_USER:-authentik}
+      AUTHENTIK_POSTGRESQL__NAME:     ${PG_DB:-authentik}
+      AUTHENTIK_POSTGRESQL__PASSWORD: ${PG_PASS}
+      AUTHENTIK_LOG_LEVEL:            info
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - authentik_media:/media
+      - authentik_templates:/templates
+    depends_on:
+      postgresql:
+        condition: service_healthy
+    networks:
+      - portal
+
+  # ---------------------------------------------------------------------------
+  # MongoDB — armazenamento de workflows do Orchestrator
+  #
+  # O script init-mongo.js cria o database, a collection e o índice único em
+  # flowId na primeira inicialização (volume vazio).
+  # ---------------------------------------------------------------------------
+  mongodb:
+    image: mongo:7
+    container_name: portal-mongodb
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping').ok", "--quiet"]
+      start_period: 15s
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    environment:
+      MONGO_INITDB_DATABASE: ${MONGODB_DATABASE:-generic-orchestrator}
+    volumes:
+      - mongo_data:/data/db
+      - ./generic-orchestrator/mongodb-workflows:/docker-entrypoint-initdb.d:ro
+    networks:
+      - portal
+
+  # ---------------------------------------------------------------------------
+  # RabbitMQ — broker para integrações QUEUE do Orchestrator
+  #
+  # Management UI disponível em http://localhost:15672 (guest/guest por padrão).
+  # ---------------------------------------------------------------------------
+  rabbitmq:
+    image: rabbitmq:3-management-alpine
+    container_name: portal-rabbitmq
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      start_period: 20s
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USERNAME:-guest}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:-guest}
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    ports:
+      - "${RABBITMQ_MANAGEMENT_PORT:-15672}:15672"
+    networks:
+      - portal
+
+  # ---------------------------------------------------------------------------
+  # Kafka — broker para integrações QUEUE do Orchestrator
+  #
+  # Modo KRaft (sem Zookeeper). Instância única para desenvolvimento.
+  # ---------------------------------------------------------------------------
+  kafka:
+    image: bitnami/kafka:3.7
+    container_name: portal-kafka
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "kafka-topics.sh --bootstrap-server localhost:9092 --list 2>&1"]
+      start_period: 30s
+      interval: 15s
+      timeout: 10s
+      retries: 5
+    environment:
+      KAFKA_CFG_NODE_ID:                         "1"
+      KAFKA_CFG_PROCESS_ROLES:                   controller,broker
+      KAFKA_CFG_CONTROLLER_QUORUM_VOTERS:        1@kafka:9093
+      KAFKA_CFG_LISTENERS:                       PLAINTEXT://:9092,CONTROLLER://:9093
+      KAFKA_CFG_ADVERTISED_LISTENERS:            PLAINTEXT://kafka:9092
+      KAFKA_CFG_LISTENER_SECURITY_PROTOCOL_MAP:  CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
+      KAFKA_CFG_CONTROLLER_LISTENER_NAMES:       CONTROLLER
+      ALLOW_PLAINTEXT_LISTENER:                  "yes"
+    volumes:
+      - kafka_data:/bitnami/kafka
+    networks:
+      - portal
+
+  # ---------------------------------------------------------------------------
+  # Manager — service-portal-manager (Kotlin 2.0 + Spring Boot 3.4)
+  #
+  # Dono da collection `workflows` no MongoDB. CRUD dos fluxos + APIs de consulta
+  # consumidas pelo orquestrador (após a migração faseada). Compartilha a mesma
+  # database/collection do orquestrador para coexistência durante a migração.
+  # ---------------------------------------------------------------------------
+  manager:
+    build:
+      context: ./service-portal-manager
+      dockerfile: Dockerfile
+    container_name: portal-manager
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:${MANAGER_INTERNAL_PORT:-8082}/actuator/health || exit 1"]
+      start_period: 60s
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    environment:
+      SERVER_PORT:              ${MANAGER_INTERNAL_PORT:-8082}
+      MONGODB_URI:              mongodb://mongodb:27017/${MONGODB_DATABASE:-generic-orchestrator}
+      MONGODB_DATABASE:         ${MONGODB_DATABASE:-generic-orchestrator}
+      JWT_SECRET:               ${MANAGER_JWT_SECRET:-${ORCHESTRATOR_JWT_SECRET:?Defina MANAGER_JWT_SECRET ou ORCHESTRATOR_JWT_SECRET no .env}}
+      JWT_EXPIRATION:           ${JWT_EXPIRATION:-3600}
+      JWT_ISSUER:               ${MANAGER_JWT_ISSUER:-service-portal-manager}
+      MANAGER_ADMIN_USERNAME:   ${MANAGER_ADMIN_USERNAME:-admin}
+      MANAGER_ADMIN_PASSWORD:   ${MANAGER_ADMIN_PASSWORD:-admin}
+    ports:
+      - "${MANAGER_PORT:-8082}:${MANAGER_INTERNAL_PORT:-8082}"
+    depends_on:
+      mongodb:
+        condition: service_healthy
+    networks:
+      - portal
+
+  # ---------------------------------------------------------------------------
+  # Redis — cache de workflows ativos do orquestrador (TTL 1h)
+  #
+  # O orquestrador faz warm-up no startup (chama Manager /workflows/active),
+  # popula o Redis com cada FlowDefinition parseada e usa o cache em todas as
+  # execuções subsequentes — só vai ao Manager em cache miss.
+  # ---------------------------------------------------------------------------
+  redis:
+    image: redis:7-alpine
+    container_name: portal-redis
+    restart: unless-stopped
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      start_period: 5s
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    networks:
+      - portal
+
+  # ---------------------------------------------------------------------------
+  # WireMock — simulador de APIs HTTP externas usadas pelos workflows
+  #
+  # Mappings/stubs em ./wiremock/mappings, response files em ./wiremock/__files.
+  # Aliases de rede (api.exemplo.com etc.) permitem que os workflows do
+  # orchestrator chamem URLs realistas — o DNS do Docker resolve para este
+  # container.
+  # ---------------------------------------------------------------------------
+  wiremock:
+    image: wiremock/wiremock:3.9.1
+    container_name: portal-wiremock
+    restart: unless-stopped
+    command: ["--port", "8080", "--global-response-templating", "--verbose"]
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8080/__admin/health || exit 1"]
+      start_period: 10s
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    volumes:
+      - ./wiremock/mappings:/home/wiremock/mappings:ro
+      - ./wiremock/__files:/home/wiremock/__files:ro
+    ports:
+      - "${WIREMOCK_PORT:-18080}:8080"
+    networks:
+      portal:
+        aliases:
+          - api.exemplo.com
+
+  # ---------------------------------------------------------------------------
+  # Orchestrator — generic-orchestrator (Java 21 + Spring Boot 3.4)
+  #
+  # Depende de Redis (cache de workflows), Manager (consulta de workflows),
+  # RabbitMQ/Kafka (integrações de execução) e WireMock (em dev/integrado, simula
+  # APIs HTTP externas chamadas pelos workflows).
+  # MongoDB foi REMOVIDO — workflows não fazem mais integração de banco.
+  # Healthcheck: Spring Boot Actuator /actuator/health.
+  # ---------------------------------------------------------------------------
+  orchestrator:
+    build:
+      context: ./generic-orchestrator
+      dockerfile: Dockerfile
+    container_name: portal-orchestrator
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:${ORCHESTRATOR_INTERNAL_PORT:-8080}/actuator/health || exit 1"]
+      start_period: 60s
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    environment:
+      SERVER_PORT:                  ${ORCHESTRATOR_INTERNAL_PORT:-8080}
+      SPRING_PROFILES_ACTIVE:       docker
+      REDIS_HOST:                   redis
+      REDIS_PORT:                   6379
+      REDIS_PASSWORD:               ${REDIS_PASSWORD:-}
+      JWT_SECRET:                   ${ORCHESTRATOR_JWT_SECRET:?Defina ORCHESTRATOR_JWT_SECRET no .env}
+      JWT_EXPIRATION:               ${JWT_EXPIRATION:-3600}
+      JWT_ISSUER:                   ${JWT_ISSUER:-generic-orchestrator}
+      MANAGER_URL:                  http://manager:${MANAGER_INTERNAL_PORT:-8082}
+      MANAGER_USERNAME:             ${MANAGER_ADMIN_USERNAME:-admin}
+      MANAGER_PASSWORD:             ${MANAGER_ADMIN_PASSWORD:-admin}
+      WORKFLOWS_CACHE_TTL_SECONDS:  ${WORKFLOWS_CACHE_TTL_SECONDS:-3600}
+      WORKFLOWS_WARM_UP_ENABLED:    ${WORKFLOWS_WARM_UP_ENABLED:-true}
+      RABBITMQ_HOST:                rabbitmq
+      RABBITMQ_PORT:                5672
+      RABBITMQ_USERNAME:            ${RABBITMQ_USERNAME:-guest}
+      RABBITMQ_PASSWORD:            ${RABBITMQ_PASSWORD:-guest}
+      KAFKA_BOOTSTRAP_SERVERS:      kafka:9092
+      KAFKA_BOOTSTRAP_SERVERS_1:    kafka:9092
+      AWS_REGION:                   ${AWS_REGION:-us-east-1}
+      AWS_SQS_ENDPOINT:             ${AWS_SQS_ENDPOINT:-}
+      AWS_ACCESS_KEY_ID:            ${AWS_ACCESS_KEY_ID:-}
+      AWS_SECRET_ACCESS_KEY:        ${AWS_SECRET_ACCESS_KEY:-}
+    depends_on:
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+      wiremock:
+        condition: service_healthy
+      manager:
+        condition: service_healthy
+    networks:
+      - portal
+
+  # ---------------------------------------------------------------------------
+  # BFF — service-portal-bff (Java 21 + Spring Boot 3.4)
+  #
+  # Valida tokens OIDC emitidos pelo Authentik via JWKS (OAuth2 Resource Server).
+  # JWKS_URI usa o hostname interno do container Authentik.
+  # ISSUER_URI usa a URL pública do Authentik (corresponde ao campo "iss" do JWT).
+  #
+  # Healthcheck: endpoint /bff/health (público, sem autenticação).
+  # ---------------------------------------------------------------------------
+  bff:
+    build:
+      context: ./service-portal-bff
+      dockerfile: Dockerfile
+    container_name: portal-bff
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:${BFF_INTERNAL_PORT:-8081}/bff/health || exit 1"]
+      start_period: 45s
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    environment:
+      SERVER_PORT:           ${BFF_INTERNAL_PORT:-8081}
+      ORCHESTRATOR_URL:      http://orchestrator:${ORCHESTRATOR_INTERNAL_PORT:-8080}
+      ORCHESTRATOR_USERNAME: ${ORCHESTRATOR_USERNAME:-admin}
+      ORCHESTRATOR_PASSWORD: ${ORCHESTRATOR_PASSWORD:-admin}
+      MANAGER_URL:           http://manager:${MANAGER_INTERNAL_PORT:-8082}
+      MANAGER_USERNAME:      ${MANAGER_ADMIN_USERNAME:-admin}
+      MANAGER_PASSWORD:      ${MANAGER_ADMIN_PASSWORD:-admin}
+      # JWKS_URI: URL interna do Authentik (resolução via DNS do Docker)
+      AUTHENTIK_JWKS_URI:    http://authentik-server:9000/application/o/${AUTHENTIK_APP_SLUG:-service-portal}/jwks/
+      # ISSUER_URI: URL pública que aparece no claim "iss" dos tokens emitidos
+      AUTHENTIK_ISSUER_URI:  http://localhost:${AUTHENTIK_PORT_HTTP:-9000}/application/o/${AUTHENTIK_APP_SLUG:-service-portal}/
+    ports:
+      - "${BFF_PORT:-8081}:${BFF_INTERNAL_PORT:-8081}"
+    depends_on:
+      authentik-server:
+        condition: service_healthy
+      orchestrator:
+        condition: service_healthy
+      manager:
+        condition: service_healthy
+    networks:
+      - portal
+
+  # ---------------------------------------------------------------------------
+  # Frontend — service-portal-frontend (React + Vite → nginx)
+  #
+  # Imagem de produção: build estático servido pelo nginx.
+  # BFF_URL: URL interna do BFF (Docker DNS). O nginx proxia /bff/ para o BFF.
+  # NGINX_PORT: porta interna do nginx (padrão 80).
+  # ---------------------------------------------------------------------------
+  frontend:
+    build:
+      context: ./service-portal-frontend
+      dockerfile: Dockerfile
+    container_name: portal-frontend
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost/ || exit 1"]
+      start_period: 20s
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    environment:
+      BFF_URL:    http://bff:${BFF_INTERNAL_PORT:-8081}
+      NGINX_PORT: ${FRONTEND_INTERNAL_PORT:-80}
+    ports:
+      - "${FRONTEND_PORT:-80}:${FRONTEND_INTERNAL_PORT:-80}"
+    depends_on:
+      bff:
+        condition: service_healthy
+    networks:
+      - portal
+
+# =============================================================================
+# Volumes
+# =============================================================================
+volumes:
+  pg_data:
+    driver: local
+  authentik_media:
+    driver: local
+  authentik_templates:
+    driver: local
+  mongo_data:
+    driver: local
+  rabbitmq_data:
+    driver: local
+  kafka_data:
+    driver: local
+
+# =============================================================================
+# Redes
+#   portal — bridge único compartilhado por todos os serviços.
+#            O Orchestrator precisa de saída para internet (chamadas HTTP
+#            externas nos fluxos), então não usamos internal: true.
+# =============================================================================
+networks:
+  portal:
+    driver: bridge
