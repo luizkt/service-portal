@@ -94,8 +94,9 @@ Manager (Kotlin, :8082) — dono da collection `workflows` (após migração fas
 | Correção do `docker-compose.yml` (contextos de build) | Raiz | ✅ Feito | Zookeeper + Confluentinc Kafka adicionado (Bitnami indisponível), healthchecks corrigidos (wget→curl), port mapping Orchestrator adicionado, README atualizado |
 | Validação do `docker compose up` | Raiz | ✅ Feito | Todos os containers rodando saudáveis (healthy), todos os endpoints respondendo HTTP 200, stack completa validada |
 | Revisão dos cenarios de testes com novas atualizaćões | Raiz | ✅ Feito | YAMLs em inglês, endpoints REST atualizados, DATABASE removido, Manager integrado, script automático criado |
-| Diagnóstico e resolução de instabilidade dos containers | Raiz | 🔧 EM PROGRESSO | Phase 1 ✅ Orchestrator: endpoints corrigidos (commit ad79a23); Phase 2 ✅ Manager: autenticação diagnosticada e funcional; Phase 3: Restart limpo para resetar healthchecks |
-| **Análise detalhada: Estabilidade Manager & Erros 401** | Manager | ✅ CONCLUÍDO | DIAGNOSTICO-MANAGER-401.md criado; todos endpoints OK (autenticação 201, fluxos 200); containers em unhealthy por artefato de estado (requer restart) |
+| Diagnóstico e resolução de instabilidade dos containers | Raiz | ✅ CONCLUÍDO | Phase 1 ✅ Orchestrator (endpoints corrigidos); Phase 2 ✅ Manager (autenticação OK); Phase 3 ✅ Docker curl fix (containers healthy) |
+| **Análise detalhada: Estabilidade Manager & Erros 401** | Manager | ✅ CONCLUÍDO | DIAGNOSTICO-MANAGER-401.md; todos endpoints OK; containers healthy após curl fix |
+| **Fix Crítico: Healthcheck dos Containers** | Raiz | ✅ CONCLUÍDO | DIAGNOSTICO-HEALTHCHECK-CURL.md; Dockerfiles + apk curl; Manager/Orchestrator/BFF → HEALTHY ✅ |
 | Criaćão de arquivo AGENTS.md para cada aplicaćão para melhor prática | Todos | ⬜ Pendente | ponto em aberto |
 
 ---
