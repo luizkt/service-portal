@@ -2,15 +2,18 @@
 
 Foco: jornada do usuário no portal — cadastro, gestão e execução de workflows com cada tipo de integração disponível.
 
-**Pré-requisito:** todos os serviços no ar via `docker compose up -d` + BFF e frontend rodando.
+**Pré-requisito:** todos os serviços no ar via `docker compose -f docker-compose-service-portal.yml up -d`.
 
 ```
-Frontend (:5173) → BFF (:8081) → Orquestrador (:8080) → MongoDB + Brokers
+Frontend (:80) → BFF (:8081) → [Manager (:8082) para CRUD + Orquestrador (:8080) para execução]
+                    ↓
+         MongoDB + Redis + RabbitMQ + Kafka + LocalStack (SQS)
 ```
 
-> Auth de usuário final (Authentik) ainda não está integrado ao frontend.
-> Os testes abaixo assumem que o BFF aceita requisições sem token de usuário
-> e autentica internamente no orquestrador (server-to-server).
+> **Formato:** Todos os YAMLs, endpoints e payloads estão em **INGLÊS** (refactor recente).
+> **Auth:** BFF autentica internamente no orquestrador (server-to-server) com JWT HS512.
+> **CRUD:** Migrado para o service-portal-manager; orquestrador apenas executa (cache Redis 1h).
+> **Endpoints:** Padrão REST com sub-recursos — `/flows/{flowId}/versions/{version}/executions`
 
 ---
 
@@ -18,264 +21,216 @@ Frontend (:5173) → BFF (:8081) → Orquestrador (:8080) → MongoDB + Brokers
 
 1. [Saúde do sistema](#1-saúde-do-sistema)
 2. [Server Driven UI — menu e navegação](#2-server-driven-ui--menu-e-navegação)
-3. [CRUD de workflows](#3-crud-de-workflows)
+3. [CRUD de workflows (Manager)](#3-crud-de-workflows-manager)
 4. [Execução — workflow HTTP](#4-execução--workflow-http)
-5. [Execução — workflow DATABASE](#5-execução--workflow-database)
-6. [Execução — workflow QUEUE RabbitMQ](#6-execução--workflow-queue-rabbitmq)
-7. [Execução — workflow QUEUE Kafka](#7-execução--workflow-queue-kafka)
-8. [Execução — workflow QUEUE SQS](#8-execução--workflow-queue-sqs)
-9. [Execução — workflow completo (todos os tipos)](#9-execução--workflow-completo-todos-os-tipos)
-10. [Cenários negativos e validações de contrato](#10-cenários-negativos-e-validações-de-contrato)
+5. [Execução — workflow QUEUE RabbitMQ](#5-execução--workflow-queue-rabbitmq)
+6. [Execução — workflow QUEUE Kafka](#6-execução--workflow-queue-kafka)
+7. [Execução — workflow QUEUE SQS](#7-execução--workflow-queue-sqs)
+8. [Execução — workflow completo (todos os tipos)](#8-execução--workflow-completo-todos-os-tipos)
+9. [Cenários negativos e validações de contrato](#9-cenários-negativos-e-validações-de-contrato)
 
 ---
 
 ## Workflows de referência
 
-Os YAMLs abaixo são usados nos testes. Cadastre-os via `POST /bff/flows` antes de executar cada seção.
+Os YAMLs abaixo são usados nos testes. Cadastre-os via `POST /bff/flows` antes de executar cada seção (todos em **inglês**).
 
 ### WF-HTTP — validação via chamada HTTP
 
 ```yaml
-fluxo:
-  id: "teste-http"
-  descricao: "Workflow de teste — integração HTTP"
-  versao: "1.0.0"
-  ativo: true
+flow:
+  flowId: "test-http"
+  version: "1.0.0"
+  description: "Test workflow — HTTP integration"
+  active: true
 
-  contrato:
-    campos:
-      - nome: "clienteId"
-        tipo: STRING
-        obrigatorio: true
-        validacoes:
-          - tipo: NOT_BLANK
-          - tipo: PATTERN
-            valor: "^[A-Z0-9]{6,20}$"
-            mensagem: "clienteId inválido"
+  contract:
+    fields:
+      - name: "clientId"
+        type: STRING
+        required: true
+        validations:
+          - type: NOT_BLANK
+          - type: PATTERN
+            value: "^[A-Z0-9]{6,20}$"
+            message: "Invalid clientId"
 
-  integracoes:
-    - id: "buscar-cliente"
-      ordem: 1
-      tipo: HTTP
-      continuarEmErro: false
+  integrations:
+    - id: "fetch-client"
+      order: 1
+      type: HTTP
+      continueOnError: false
       http:
-        url: "https://jsonplaceholder.typicode.com/users/1"
-        metodo: GET
+        url: "http://api.exemplo.com/clients/CLI001A"
+        method: GET
         headers:
           Accept: "application/json"
         timeout: 5000
-        mapeamentoResposta:
-          campoOrigem: "name"
-          campoDestino: "nomeCliente"
-```
-
-### WF-DATABASE — persistência no MongoDB
-
-```yaml
-fluxo:
-  id: "teste-database"
-  descricao: "Workflow de teste — integração DATABASE"
-  versao: "1.0.0"
-  ativo: true
-
-  contrato:
-    campos:
-      - nome: "clienteId"
-        tipo: STRING
-        obrigatorio: true
-        validacoes:
-          - tipo: NOT_BLANK
-      - nome: "valor"
-        tipo: DECIMAL
-        obrigatorio: true
-        validacoes:
-          - tipo: POSITIVE
-
-  integracoes:
-    - id: "salvar-pedido"
-      ordem: 1
-      tipo: DATABASE
-      continuarEmErro: false
-      database:
-        operacao: INSERT
-        colecao: "pedidos-teste"
-        documentoTemplate: |
-          {"clienteId":"{{contrato.clienteId}}","valor":"{{contrato.valor}}","status":"CRIADO","ts":"{{now()}}"}
-        mapeamentoResposta:
-          campoOrigem: "_id"
-          campoDestino: "pedidoId"
+        responseMapping:
+          sourceField: "name"
+          targetField: "clientName"
 ```
 
 ### WF-RABBITMQ — publicação em fila RabbitMQ
 
 ```yaml
-fluxo:
-  id: "teste-rabbitmq"
-  descricao: "Workflow de teste — integração QUEUE RabbitMQ"
-  versao: "1.0.0"
-  ativo: true
+flow:
+  flowId: "test-rabbitmq"
+  version: "1.0.0"
+  description: "Test workflow — RabbitMQ integration"
+  active: true
 
-  contrato:
-    campos:
-      - nome: "pedidoId"
-        tipo: STRING
-        obrigatorio: true
-        validacoes:
-          - tipo: NOT_BLANK
+  contract:
+    fields:
+      - name: "orderId"
+        type: STRING
+        required: true
+        validations:
+          - type: NOT_BLANK
 
-  integracoes:
-    - id: "rabbitmq-notifier"
-      ordem: 1
-      tipo: QUEUE
+  integrations:
+    - id: "notify-rabbitmq"
+      order: 1
+      type: QUEUE
       provider: RABBITMQ
-      continuarEmErro: false
+      continueOnError: false
       queue:
-        exchange: "pedidos.exchange"
-        routingKey: "pedido.criado"
-        persistente: true
-        mensagemTemplate: |
-          {"evento":"PEDIDO_CRIADO","pedidoId":"{{contrato.pedidoId}}","ts":"{{now()}}"}
+        exchange: "orders.exchange"
+        routingKey: "order.created"
+        persistent: true
+        messageTemplate: |
+          {"event":"ORDER_CREATED","orderId":"{{contract.orderId}}","timestamp":"{{now()}}"}
 ```
 
 ### WF-KAFKA — publicação em tópico Kafka
 
 ```yaml
-fluxo:
-  id: "teste-kafka"
-  descricao: "Workflow de teste — integração QUEUE Kafka"
-  versao: "1.0.0"
-  ativo: true
+flow:
+  flowId: "test-kafka"
+  version: "1.0.0"
+  description: "Test workflow — Kafka integration"
+  active: true
 
-  contrato:
-    campos:
-      - nome: "pedidoId"
-        tipo: STRING
-        obrigatorio: true
-        validacoes:
-          - tipo: NOT_BLANK
+  contract:
+    fields:
+      - name: "orderId"
+        type: STRING
+        required: true
+        validations:
+          - type: NOT_BLANK
 
-  integracoes:
-    - id: "kafka-user-tracking"
-      ordem: 1
-      tipo: QUEUE
+  integrations:
+    - id: "track-kafka"
+      order: 1
+      type: QUEUE
       provider: KAFKA
-      continuarEmErro: false
+      continueOnError: false
       queue:
-        topic: "pedidos.criados"
-        mensagemTemplate: |
-          {"evento":"PEDIDO_CRIADO","pedidoId":"{{contrato.pedidoId}}"}
+        topic: "orders.created"
+        messageTemplate: |
+          {"event":"ORDER_CREATED","orderId":"{{contract.orderId}}"}
 ```
 
 ### WF-SQS — publicação em fila SQS (LocalStack)
 
 ```yaml
-fluxo:
-  id: "teste-sqs"
-  descricao: "Workflow de teste — integração QUEUE SQS"
-  versao: "1.0.0"
-  ativo: true
+flow:
+  flowId: "test-sqs"
+  version: "1.0.0"
+  description: "Test workflow — SQS integration"
+  active: true
 
-  contrato:
-    campos:
-      - nome: "pedidoId"
-        tipo: STRING
-        obrigatorio: true
-        validacoes:
-          - tipo: NOT_BLANK
+  contract:
+    fields:
+      - name: "orderId"
+        type: STRING
+        required: true
+        validations:
+          - type: NOT_BLANK
 
-  integracoes:
-    - id: "notificar-sqs"
-      ordem: 1
-      tipo: QUEUE
+  integrations:
+    - id: "notify-sqs"
+      order: 1
+      type: QUEUE
       provider: SQS
-      continuarEmErro: false
+      continueOnError: false
       queue:
-        queueUrl: "http://localhost:4566/000000000000/pedidos-teste"
-        mensagemTemplate: |
-          {"evento":"PEDIDO_CRIADO","pedidoId":"{{contrato.pedidoId}}"}
+        queueUrl: "http://localhost:4566/000000000000/orders-test"
+        messageTemplate: |
+          {"event":"ORDER_CREATED","orderId":"{{contract.orderId}}"}
 ```
 
 ### WF-COMPLETO — todos os tipos em sequência (baseado no example-flow.yml)
 
 ```yaml
-fluxo:
-  id: "criar-pedido-v1"
-  descricao: "Fluxo completo — HTTP + DATABASE + RabbitMQ + Kafka + SQS"
-  versao: "1.0.0"
-  ativo: true
+flow:
+  flowId: "create-order-v1"
+  version: "1.0.0"
+  description: "Complete workflow — HTTP + RabbitMQ + Kafka + SQS"
+  active: true
 
-  contrato:
-    campos:
-      - nome: "clienteId"
-        tipo: STRING
-        obrigatorio: true
-        validacoes:
-          - tipo: NOT_BLANK
-          - tipo: PATTERN
-            valor: "^[A-Z0-9]{6,20}$"
-            mensagem: "clienteId inválido"
-      - nome: "valor"
-        tipo: DECIMAL
-        obrigatorio: true
-        validacoes:
-          - tipo: POSITIVE
+  contract:
+    fields:
+      - name: "clientId"
+        type: STRING
+        required: true
+        validations:
+          - type: NOT_BLANK
+          - type: PATTERN
+            value: "^[A-Z0-9]{6,20}$"
+            message: "Invalid clientId"
+      - name: "amount"
+        type: DECIMAL
+        required: true
+        validations:
+          - type: POSITIVE
 
-  integracoes:
-    - id: "validar-cliente"
-      ordem: 1
-      tipo: HTTP
-      continuarEmErro: false
+  integrations:
+    - id: "validate-client"
+      order: 1
+      type: HTTP
+      continueOnError: false
       http:
-        url: "https://jsonplaceholder.typicode.com/users/1"
-        metodo: GET
+        url: "http://api.exemplo.com/clients/{{contract.clientId}}"
+        method: GET
         headers:
           Accept: "application/json"
         timeout: 5000
+        responseMapping:
+          sourceField: "name"
+          targetField: "clientName"
 
-    - id: "salvar-pedido"
-      ordem: 2
-      tipo: DATABASE
-      continuarEmErro: false
-      database:
-        operacao: INSERT
-        colecao: "pedidos"
-        documentoTemplate: |
-          {"clienteId":"{{contrato.clienteId}}","valor":"{{contrato.valor}}","status":"CRIADO"}
-        mapeamentoResposta:
-          campoDestino: "pedidoId"
-          campoOrigem: "_id"
-
-    - id: "rabbitmq-notifier"
-      ordem: 3
-      tipo: QUEUE
+    - id: "notify-rabbitmq"
+      order: 2
+      type: QUEUE
       provider: RABBITMQ
-      continuarEmErro: true
+      continueOnError: true
       queue:
-        exchange: "pedidos.exchange"
-        routingKey: "pedido.criado"
-        mensagemTemplate: |
-          {"evento":"PEDIDO_CRIADO","pedidoId":"{{integracoes.salvar-pedido.pedidoId}}"}
-        persistente: true
+        exchange: "orders.exchange"
+        routingKey: "order.created"
+        persistent: true
+        messageTemplate: |
+          {"event":"ORDER_CREATED","clientId":"{{contract.clientId}}","amount":"{{contract.amount}}"}
 
-    - id: "kafka-user-tracking"
-      ordem: 4
-      tipo: QUEUE
+    - id: "track-kafka"
+      order: 3
+      type: QUEUE
       provider: KAFKA
-      continuarEmErro: true
+      continueOnError: true
       queue:
-        topic: "pedidos.criados"
-        mensagemTemplate: |
-          {"pedidoId":"{{integracoes.salvar-pedido.pedidoId}}"}
+        topic: "orders.created"
+        messageTemplate: |
+          {"event":"ORDER_CREATED","clientId":"{{contract.clientId}}","amount":"{{contract.amount}}"}
 
-    - id: "notificar-sqs"
-      ordem: 5
-      tipo: QUEUE
+    - id: "notify-sqs"
+      order: 4
+      type: QUEUE
       provider: SQS
-      continuarEmErro: true
+      continueOnError: true
       queue:
-        queueUrl: "http://localhost:4566/000000000000/pedidos-teste"
-        mensagemTemplate: |
-          {"pedidoId":"{{integracoes.salvar-pedido.pedidoId}}"}
+        queueUrl: "http://localhost:4566/000000000000/orders-test"
+        messageTemplate: |
+          {"event":"ORDER_CREATED","clientId":"{{contract.clientId}}","amount":"{{contract.amount}}"}
 ```
 
 ---
@@ -287,12 +242,14 @@ Objetivo: confirmar que todos os serviços estão no ar antes de qualquer teste.
 | # | Teste | Como executar | Resultado esperado |
 |---|-------|---------------|-------------------|
 | 1.1 | Health do BFF | `GET http://localhost:8081/bff/health` | `200 OK` |
-| 1.2 | Health do orquestrador | `GET http://localhost:8080/actuator/health` | `200 OK`, status `UP` |
-| 1.3 | MongoDB acessível | `docker exec -it <mongo> mongosh --eval "db.adminCommand('ping')"` | `{ ok: 1 }` |
-| 1.4 | RabbitMQ Management UI | Abrir `http://localhost:15672` (guest/guest) | Painel carrega |
-| 1.5 | Kafka acessível | `docker exec -it <kafka> kafka-topics --bootstrap-server localhost:9092 --list` | Sem erro |
-| 1.6 | LocalStack SQS | `aws --endpoint-url=http://localhost:4566 sqs list-queues` | Sem erro |
-| 1.7 | Frontend carrega | Abrir `http://localhost:5173` no browser | Página inicial renderiza |
+| 1.2 | Health do Orquestrador | `GET http://localhost:8080/actuator/health` | `200 OK`, status `UP` |
+| 1.3 | Health do Manager | `GET http://localhost:8082/actuator/health` | `200 OK`, status `UP` |
+| 1.4 | MongoDB acessível | `docker exec -it <mongo> mongosh --eval "db.adminCommand('ping')"` | `{ ok: 1 }` |
+| 1.5 | Redis acessível | `docker exec -it <redis> redis-cli ping` | `PONG` |
+| 1.6 | RabbitMQ Management UI | Abrir `http://localhost:15672` (guest/guest) | Painel carrega |
+| 1.7 | Kafka acessível | `docker exec -it <kafka> kafka-topics --bootstrap-server localhost:9092 --list` | Sem erro |
+| 1.8 | LocalStack SQS | `aws --endpoint-url=http://localhost:4566 sqs list-queues` | Sem erro |
+| 1.9 | Frontend carrega | Abrir `http://localhost` no browser | Página inicial renderiza |
 
 ---
 
@@ -303,18 +260,18 @@ Objetivo: validar que o BFF entrega o menu correto e que o frontend renderiza di
 | # | Teste | Como executar | Resultado esperado |
 |---|-------|---------------|-------------------|
 | 2.1 | BFF retorna menu | `GET http://localhost:8081/bff/menu` | JSON com item `flow-manager` contendo `id`, `label`, `icon`, `uiSchemaUrl` |
-| 2.2 | BFF retorna schema da feature | `GET http://localhost:8081/bff/ui/flow-manager` | JSON com `featureId: "flow-manager"`, `type: "flow-manager"`, `title` |
-| 2.3 | Sidebar renderiza o item | Abrir o frontend, observar sidebar | Item "Gerenciador de Fluxos" visível |
-| 2.4 | Clicar no item carrega a feature | Clicar em "Gerenciador de Fluxos" | Área principal exibe o FlowManager (tabela de fluxos ou tela vazia) |
-| 2.5 | Feature type desconhecido | Forçar `GET /bff/ui/inexistente` | BFF retorna erro ou schema com type não mapeado; frontend exibe "componente não encontrado" |
+| 2.2 | BFF retorna schema da feature | `GET http://localhost:8081/bff/features/flow-manager/ui-schema` | JSON com `featureId: "flow-manager"`, `type: "flow-manager"`, `title` |
+| 2.3 | Sidebar renderiza o item | Abrir o frontend (http://localhost), observar sidebar | Item "Flow Manager" visível |
+| 2.4 | Clicar no item carrega a feature | Clicar em "Flow Manager" | Área principal exibe a tabela de fluxos |
+| 2.5 | Feature type desconhecido | Forçar `GET /bff/features/inexistente/ui-schema` | BFF retorna erro ou schema com type não mapeado; frontend exibe "componente não encontrado" |
 
 ---
 
-## 3. CRUD de workflows
+## 3. CRUD de workflows (Manager)
 
-Objetivo: validar o ciclo completo de criação, leitura, atualização e desativação de um workflow via BFF.
+Objetivo: validar o ciclo completo de criação, leitura, atualização e desativação de um workflow via BFF (que delega ao Manager).
 
-Usar o YAML **WF-HTTP** como payload nos testes abaixo.
+Usar o YAML **WF-HTTP** como payload nos testes abaixo (em **inglês**).
 
 ### 3.1 Criar workflow
 
@@ -324,169 +281,136 @@ curl -X POST http://localhost:8081/bff/flows \
   --data-binary @wf-http.yml
 ```
 
-**Resultado esperado:** `201 Created` com o workflow persistido no MongoDB.
+**Resultado esperado:** `201 Created` com o workflow persistido no MongoDB via Manager.
 
 **Verificar no MongoDB:**
 ```js
-db.workflows.findOne({ id: "teste-http" })
-// deve retornar o documento com ativo: true
+db.workflows.findOne({ flowId: "test-http" })
+// deve retornar o documento com active: true e yamlContent preenchido
 ```
 
-### 3.2 Listar workflows
+### 3.2 Listar workflows (paginado)
 
 ```bash
-curl http://localhost:8081/bff/flows
+curl "http://localhost:8081/bff/flows?page=0&size=20"
 ```
 
-**Resultado esperado:** array JSON contendo o workflow `teste-http` com campos `id`, `descricao`, `versao`, `ativo`.
+**Resultado esperado:** JSON com `content` (array de workflows), `totalElements`, `totalPages`.
 
 **No frontend:** abrir o FlowManager e confirmar que o workflow aparece na tabela.
 
-### 3.3 Buscar workflow por ID
+### 3.3 Buscar workflow por ID e versão
 
 ```bash
-curl http://localhost:8081/bff/flows/teste-http
+curl http://localhost:8081/bff/flows/test-http/versions/1.0.0
 ```
 
-**Resultado esperado:** `200 OK` com os dados completos do workflow.
+**Resultado esperado:** `200 OK` com os dados completos do workflow (sem `yamlContent`).
 
-### 3.4 Atualizar workflow
-
-Alterar o campo `descricao` no YAML e enviar:
+### 3.4 Obter YAML cru do workflow
 
 ```bash
-curl -X PUT http://localhost:8081/bff/flows/teste-http \
+curl http://localhost:8081/bff/flows/test-http/versions/1.0.0/yaml
+```
+
+**Resultado esperado:** `200 OK` com `Content-Type: application/x-yaml` — YAML cru do workflow.
+
+### 3.5 Atualizar workflow
+
+Alterar o campo `description` no YAML e enviar:
+
+```bash
+curl -X PUT http://localhost:8081/bff/flows/test-http/versions/1.0.0 \
   -H "Content-Type: text/plain" \
-  --data-binary @wf-http-atualizado.yml
+  --data-binary @wf-http-updated.yml
 ```
 
-**Resultado esperado:** `200 OK`. Buscar novamente e confirmar que `descricao` foi atualizada.
+**Resultado esperado:** `200 OK`. Buscar novamente (3.3 ou 3.4) e confirmar que `description` foi atualizada.
 
-### 3.5 Desativar workflow
+### 3.6 Desativar workflow
 
 ```bash
-curl -X DELETE http://localhost:8081/bff/flows/teste-http
+curl -X DELETE http://localhost:8081/bff/flows/test-http/versions/1.0.0
 ```
 
-**Resultado esperado:** `200 OK`. Workflow não deve mais aparecer na listagem (`ativo: false` no MongoDB). **No frontend:** confirmar que sumiu da tabela.
+**Resultado esperado:** `200 OK`. Workflow não deve mais aparecer na listagem (soft-delete: `active: false` no MongoDB). **No frontend:** confirmar que sumiu da tabela.
 
-### 3.6 Recriar para os próximos testes
+### 3.7 Recriar para os próximos testes
 
-Após 3.5, recriar o workflow para os testes de execução (repetir 3.1).
+Após 3.6, recriar o workflow para os testes de execução (repetir 3.1).
 
 ---
 
 ## 4. Execução — workflow HTTP
 
-**Pré-requisito:** WF-HTTP cadastrado e ativo.
+**Pré-requisito:** WF-HTTP cadastrado e ativo em `test-http`, versão `1.0.0`.
 
 ### Cenário feliz
 
 ```bash
-curl -X POST http://localhost:8081/bff/orchestrate/v1/teste-http \
+curl -X POST http://localhost:8081/bff/flows/test-http/versions/1.0.0/executions \
   -H "Content-Type: application/json" \
-  -d '{"clienteId": "CLI001A"}'
+  -d '{"clientId":"CLI001A"}'
 ```
 
 **Resultado esperado:**
 ```json
 {
   "executionId": "<uuid>",
-  "flowId": "teste-http",
+  "flowId": "test-http",
   "status": "SUCCESS",
-  "resultado": {
-    "buscar-cliente": {
-      "nomeCliente": "Leanne Graham"
+  "result": {
+    "fetch-client": {
+      "clientName": "Client Name from API"
     }
   },
-  "iniciadoEm": "<timestamp>",
-  "finalizadoEm": "<timestamp>"
+  "startedAt": "<timestamp>",
+  "completedAt": "<timestamp>"
 }
 ```
 
 **Pontos a validar:**
 - `status` é `SUCCESS`
-- `resultado.buscar-cliente.nomeCliente` preenchido com dado real da API externa
-- `mapeamentoResposta` funcionou: campo `name` do response mapeado para `nomeCliente`
+- `result.fetch-client.clientName` preenchido com dado real da API externa
+- `responseMapping` funcionou: campo `name` do response mapeado para `clientName`
 - Timestamps presentes e coerentes
 
-### Cenário — serviço HTTP retorna erro com `continuarEmErro: false`
+### Cenário — serviço HTTP retorna erro com `continueOnError: false`
 
-Alterar temporariamente a URL para uma inválida e re-executar.
+Alterar temporariamente a URL para uma inválida (ex: `/clients/INVALID`) e re-executar.
 
-**Resultado esperado:** `status: FAILURE` ou `ERROR`, execução interrompida no passo `buscar-cliente`.
-
----
-
-## 5. Execução — workflow DATABASE
-
-**Pré-requisito:** WF-DATABASE cadastrado e ativo.
-
-### Cenário feliz — INSERT
-
-```bash
-curl -X POST http://localhost:8081/bff/orchestrate/v1/teste-database \
-  -H "Content-Type: application/json" \
-  -d '{"clienteId": "CLI001A", "valor": 299.90}'
-```
-
-**Resultado esperado:**
-```json
-{
-  "status": "SUCCESS",
-  "resultado": {
-    "salvar-pedido": {
-      "pedidoId": "<ObjectId gerado>"
-    }
-  }
-}
-```
-
-**Verificar no MongoDB:**
-```js
-db.getCollection("pedidos-teste").find().sort({ _id: -1 }).limit(1)
-// deve retornar o documento recém inserido
-```
-
-**Pontos a validar:**
-- `pedidoId` retornado no resultado (mapeamento de `_id` para `pedidoId` funcionou)
-- Documento presente na collection `pedidos-teste` com `status: "CRIADO"`
-- Campo `ts` preenchido com timestamp via `{{now()}}`
-
-### Cenário — FIND_ONE após INSERT
-
-Criar um segundo workflow de consulta para buscar o documento inserido e validar o `filtroTemplate`.
+**Resultado esperado:** `status: FAILURE` ou `ERROR`, execução interrompida no passo `fetch-client`.
 
 ---
 
-## 6. Execução — workflow QUEUE RabbitMQ
+## 5. Execução — workflow QUEUE RabbitMQ
 
-**Pré-requisito:** WF-RABBITMQ cadastrado, exchange `pedidos.exchange` criada no RabbitMQ.
+**Pré-requisito:** WF-RABBITMQ cadastrado, exchange `orders.exchange` criada no RabbitMQ.
 
 **Criar a exchange/fila antes do teste:**
 ```bash
 # via Management UI (http://localhost:15672) ou rabbitmqadmin
-# criar exchange: pedidos.exchange (type: direct)
-# criar fila: pedidos-criados
-# fazer binding: pedidos.exchange → pedidos-criados (routingKey: pedido.criado)
+# criar exchange: orders.exchange (type: direct)
+# criar fila: orders-created
+# fazer binding: orders.exchange → orders-created (routingKey: order.created)
 ```
 
 ### Cenário feliz
 
 ```bash
-curl -X POST http://localhost:8081/bff/orchestrate/v1/teste-rabbitmq \
+curl -X POST http://localhost:8081/bff/flows/test-rabbitmq/versions/1.0.0/executions \
   -H "Content-Type: application/json" \
-  -d '{"pedidoId": "PED-001"}'
+  -d '{"orderId":"ORD-001"}'
 ```
 
 **Resultado esperado:**
 ```json
 {
   "status": "SUCCESS",
-  "resultado": {
-    "rabbitmq-notifier": {
+  "result": {
+    "notify-rabbitmq": {
       "provider": "RABBITMQ",
-      "integrationId": "rabbitmq-notifier",
+      "integrationId": "notify-rabbitmq",
       "published": true
     }
   }
@@ -494,46 +418,46 @@ curl -X POST http://localhost:8081/bff/orchestrate/v1/teste-rabbitmq \
 ```
 
 **Verificar no RabbitMQ:**
-- Acessar `http://localhost:15672` → Queues → `pedidos-criados`
-- Confirmar mensagem na fila com conteúdo `{"evento":"PEDIDO_CRIADO","pedidoId":"PED-001",...}`
+- Acessar `http://localhost:15672` → Queues → `orders-created`
+- Confirmar mensagem na fila com conteúdo `{"event":"ORDER_CREATED","orderId":"ORD-001",...}`
 
 ---
 
-## 7. Execução — workflow QUEUE Kafka
+## 6. Execução — workflow QUEUE Kafka
 
-**Pré-requisito:** WF-KAFKA cadastrado, tópico `pedidos.criados` existente.
+**Pré-requisito:** WF-KAFKA cadastrado, tópico `orders.created` existente.
 
 **Criar o tópico:**
 ```bash
 docker exec -it <kafka-container> \
   kafka-topics --bootstrap-server localhost:9092 \
-  --create --topic pedidos.criados --partitions 1 --replication-factor 1
+  --create --topic orders.created --partitions 1 --replication-factor 1
 ```
 
 **Abrir consumer para monitorar:**
 ```bash
 docker exec -it <kafka-container> \
   kafka-console-consumer --bootstrap-server localhost:9092 \
-  --topic pedidos.criados --from-beginning
+  --topic orders.created --from-beginning
 ```
 
 ### Cenário feliz
 
 ```bash
-curl -X POST http://localhost:8081/bff/orchestrate/v1/teste-kafka \
+curl -X POST http://localhost:8081/bff/flows/test-kafka/versions/1.0.0/executions \
   -H "Content-Type: application/json" \
-  -d '{"pedidoId": "PED-001"}'
+  -d '{"orderId":"ORD-001"}'
 ```
 
 **Resultado esperado:**
 ```json
 {
   "status": "SUCCESS",
-  "resultado": {
-    "kafka-user-tracking": {
+  "result": {
+    "track-kafka": {
       "provider": "KAFKA",
-      "integrationId": "kafka-user-tracking",
-      "topic": "pedidos.criados",
+      "integrationId": "track-kafka",
+      "topic": "orders.created",
       "partition": 0,
       "offset": "<numero>",
       "published": true
@@ -542,26 +466,26 @@ curl -X POST http://localhost:8081/bff/orchestrate/v1/teste-kafka \
 }
 ```
 
-**Verificar no consumer:** mensagem `{"evento":"PEDIDO_CRIADO","pedidoId":"PED-001"}` deve aparecer.
+**Verificar no consumer:** mensagem `{"event":"ORDER_CREATED","orderId":"ORD-001"}` deve aparecer.
 
 ---
 
-## 8. Execução — workflow QUEUE SQS
+## 7. Execução — workflow QUEUE SQS
 
 **Pré-requisito:** WF-SQS cadastrado, fila criada no LocalStack.
 
 **Criar a fila no LocalStack:**
 ```bash
 aws --endpoint-url=http://localhost:4566 \
-  sqs create-queue --queue-name pedidos-teste
+  sqs create-queue --queue-name orders-test
 ```
 
 ### Cenário feliz
 
 ```bash
-curl -X POST http://localhost:8081/bff/orchestrate/v1/teste-sqs \
+curl -X POST http://localhost:8081/bff/flows/test-sqs/versions/1.0.0/executions \
   -H "Content-Type: application/json" \
-  -d '{"pedidoId": "PED-001"}'
+  -d '{"orderId":"ORD-001"}'
 ```
 
 **Resultado esperado:** `status: SUCCESS`, `published: true`.
@@ -570,160 +494,192 @@ curl -X POST http://localhost:8081/bff/orchestrate/v1/teste-sqs \
 ```bash
 aws --endpoint-url=http://localhost:4566 \
   sqs receive-message \
-  --queue-url http://localhost:4566/000000000000/pedidos-teste
+  --queue-url http://localhost:4566/000000000000/orders-test
 ```
 Deve retornar a mensagem com o corpo correto.
 
 ---
 
-## 9. Execução — workflow completo (todos os tipos)
+## 8. Execução — workflow completo (todos os tipos)
 
-**Pré-requisito:** WF-COMPLETO (`criar-pedido-v1`) cadastrado + infraestrutura dos testes 4 a 8 pronta.
+**Pré-requisito:** WF-COMPLETO (`create-order-v1`) cadastrado + infraestrutura dos testes 4 a 7 pronta.
 
 ```bash
-curl -X POST http://localhost:8081/bff/orchestrate/v1/criar-pedido-v1 \
+curl -X POST http://localhost:8081/bff/flows/create-order-v1/versions/1.0.0/executions \
   -H "Content-Type: application/json" \
-  -d '{"clienteId": "CLI001A", "valor": 499.90}'
+  -d '{"clientId":"CLI001A","amount":499.90}'
 ```
 
 **Resultado esperado:**
 ```json
 {
   "status": "SUCCESS",
-  "resultado": {
-    "validar-cliente": { ... },
-    "salvar-pedido": { "pedidoId": "<id>" },
-    "rabbitmq-notifier": { "published": true },
-    "kafka-user-tracking": { "published": true, "topic": "pedidos.criados" },
-    "notificar-sqs": { "published": true }
+  "result": {
+    "validate-client": {
+      "clientName": "..."
+    },
+    "notify-rabbitmq": { "published": true },
+    "track-kafka": { "published": true, "topic": "orders.created" },
+    "notify-sqs": { "published": true }
   }
 }
 ```
 
 **Pontos a validar em sequência:**
-1. Passo HTTP executado primeiro — response mapeado no contexto
-2. Passo DATABASE usou `{{contrato.clienteId}}` corretamente — documento no MongoDB
-3. Passo RabbitMQ usou `{{integracoes.salvar-pedido.pedidoId}}` — referência entre passos funcionou
-4. Passo Kafka publicou no tópico correto
-5. Passo SQS publicou na fila LocalStack
-6. `continuarEmErro: true` nos passos de queue — falha em um não interrompe os seguintes
+1. Passo HTTP (`validate-client`) executado primeiro — response mapeado no contexto
+2. Passo RabbitMQ (`notify-rabbitmq`) usou `{{contract.clientId}}` e `{{contract.amount}}` corretamente
+3. Passo Kafka (`track-kafka`) publicou no tópico correto
+4. Passo SQS (`notify-sqs`) publicou na fila LocalStack
+5. `continueOnError: true` nos passos de queue — falha em um não interrompe os seguintes
 
-**Cenário — falha isolada em queue com `continuarEmErro: true`**
+**Cenário — falha isolada em queue com `continueOnError: true`**
 
 Derrubar o RabbitMQ temporariamente e re-executar. O esperado é:
-- Passo `rabbitmq-notifier` falha
-- Passos `kafka-user-tracking` e `notificar-sqs` continuam e são executados
+- Passo `notify-rabbitmq` falha
+- Passos `track-kafka` e `notify-sqs` continuam e são executados
 - `status` geral indica execução parcial (verificar comportamento atual do orquestrador)
 
 ---
 
-## 10. Cenários negativos e validações de contrato
+## 9. Cenários negativos e validações de contrato
 
-### 10.1 Payload inválido — campo obrigatório ausente
+### 9.1 Payload inválido — campo obrigatório ausente
 
 ```bash
-curl -X POST http://localhost:8081/bff/orchestrate/v1/criar-pedido-v1 \
+curl -X POST http://localhost:8081/bff/flows/create-order-v1/versions/1.0.0/executions \
   -H "Content-Type: application/json" \
-  -d '{"valor": 100.00}'
+  -d '{"amount":100.00}'
 ```
 
-**Esperado:** `400 Bad Request` com mensagem indicando que `clienteId` é obrigatório.
+**Esperado:** `400 Bad Request` com mensagem indicando que `clientId` é obrigatório.
 
-### 10.2 Payload inválido — PATTERN não respeitado
+### 9.2 Payload inválido — PATTERN não respeitado
 
 ```bash
-curl -X POST http://localhost:8081/bff/orchestrate/v1/criar-pedido-v1 \
+curl -X POST http://localhost:8081/bff/flows/create-order-v1/versions/1.0.0/executions \
   -H "Content-Type: application/json" \
-  -d '{"clienteId": "id inválido!", "valor": 100.00}'
+  -d '{"clientId":"id inválido!","amount":100.00}'
 ```
 
-**Esperado:** `400 Bad Request` com mensagem `"clienteId inválido"` (definida no PATTERN do contrato).
+**Esperado:** `400 Bad Request` com mensagem `"Invalid clientId"` (definida no PATTERN do contrato).
 
-### 10.3 Payload inválido — tipo errado
+### 9.3 Payload inválido — tipo errado
 
 ```bash
-curl -X POST http://localhost:8081/bff/orchestrate/v1/criar-pedido-v1 \
+curl -X POST http://localhost:8081/bff/flows/create-order-v1/versions/1.0.0/executions \
   -H "Content-Type: application/json" \
-  -d '{"clienteId": "CLI001A", "valor": "nao-e-numero"}'
+  -d '{"clientId":"CLI001A","amount":"not-a-number"}'
 ```
 
-**Esperado:** `400 Bad Request` indicando tipo inválido para `valor`.
+**Esperado:** `400 Bad Request` indicando tipo inválido para `amount`.
 
-### 10.4 Payload inválido — valor não positivo (POSITIVE)
+### 9.4 Payload inválido — valor não positivo (POSITIVE)
 
 ```bash
--d '{"clienteId": "CLI001A", "valor": -50.00}'
+curl -X POST http://localhost:8081/bff/flows/create-order-v1/versions/1.0.0/executions \
+  -H "Content-Type: application/json" \
+  -d '{"clientId":"CLI001A","amount":-50.00}'
 ```
 
 **Esperado:** `400 Bad Request`.
 
-### 10.5 Workflow inexistente
+### 9.5 Workflow inexistente
 
 ```bash
-curl -X POST http://localhost:8081/bff/orchestrate/v1/fluxo-inexistente \
+curl -X POST http://localhost:8081/bff/flows/inexistent/versions/1.0.0/executions \
   -H "Content-Type: application/json" \
   -d '{}'
 ```
 
 **Esperado:** `404 Not Found`.
 
-### 10.6 Versão errada
+### 9.6 Versão inexistente
 
 ```bash
-curl -X POST http://localhost:8081/bff/orchestrate/v99/criar-pedido-v1 \
+curl -X POST http://localhost:8081/bff/flows/create-order-v1/versions/99.0.0/executions \
   -H "Content-Type: application/json" \
-  -d '{"clienteId": "CLI001A", "valor": 100.00}'
+  -d '{"clientId":"CLI001A","amount":100.00}'
 ```
 
-**Esperado:** `404 Not Found` — não existe workflow com `id: criar-pedido-v1` e `versao: v99`.
+**Esperado:** `404 Not Found` — não existe workflow com `flowId: create-order-v1` e `version: 99.0.0`.
 
-### 10.7 YAML inválido no cadastro
+### 9.7 YAML inválido no cadastro
 
 ```bash
 curl -X POST http://localhost:8081/bff/flows \
   -H "Content-Type: text/plain" \
-  -d 'yaml: isto: nao: e: valido: :::'
+  -d 'invalid: yaml: syntax: :::'
 ```
 
 **Esperado:** `400 Bad Request` com mensagem de parse error.
 
-### 10.8 Cadastrar workflow com ID duplicado
+### 9.8 Cadastrar workflow com ID e versão duplicados
 
-Enviar o mesmo YAML duas vezes.
+Enviar o mesmo YAML duas vezes via `POST /bff/flows`.
 
-**Esperado:** segundo `POST` retorna erro de conflito (verificar comportamento atual — pode ser `409 Conflict` ou atualização silenciosa).
+**Esperado:** segundo `POST` retorna erro de conflito (verificar comportamento — pode ser `409 Conflict` ou atualização silenciosa).
 
 ---
 
 ## Checklist de execução
 
 ```
-[ ] 1. Saúde do sistema — todos os serviços no ar
-[ ] 2. Server Driven UI — menu e navegação OK
-[ ] 3. CRUD completo — criar, listar, buscar, atualizar, desativar
-[ ] 4. Execução HTTP — cenário feliz + erro com continuarEmErro: false
-[ ] 5. Execução DATABASE — INSERT + mapeamento de _id
-[ ] 6. Execução RabbitMQ — mensagem na fila confirmada
-[ ] 7. Execução Kafka — mensagem no tópico confirmada
-[ ] 8. Execução SQS — mensagem na fila LocalStack confirmada
-[ ] 9. Execução completa — todos os passos em sequência + referência entre passos
-[ ] 10. Cenários negativos — validações de contrato e erros de roteamento
+[ ] 1. Saúde do sistema — todos os serviços no ar (BFF, Orquestrador, Manager, MongoDB, Redis, RabbitMQ, Kafka, LocalStack)
+[ ] 2. Server Driven UI — menu e navegação OK (endpoints /bff/menu e /bff/features/{id}/ui-schema)
+[ ] 3. CRUD completo (Manager via BFF) — criar, listar, buscar, obter YAML, atualizar, desativar
+[ ] 4. Execução HTTP — cenário feliz + erro com continueOnError: false
+[ ] 5. Execução RabbitMQ — mensagem na fila confirmada
+[ ] 6. Execução Kafka — mensagem no tópico confirmada
+[ ] 7. Execução SQS — mensagem na fila LocalStack confirmada
+[ ] 8. Execução completa — todos os passos em sequência + referência entre passos (e.g., {{contract.x}})
+[ ] 9. Cenários negativos — validações de contrato, erros de roteamento, payloads inválidos
+[ ] 10. Persistência — workflows salvos no MongoDB via Manager, cache Redis no Orquestrador
 ```
 
 ---
 
-## Tarefa desta sessão (para usar com o Claude)
+## Tarefas de teste
 
-> Preencha quando for pedir implementação de algum cenário de teste.
+### Script de validação automática
 
-**Cenário a implementar:**
-(ex: teste unitário Java para o cenário 10.1 — campo obrigatório ausente)
+Um script `teste-integrado-service-portal.sh` foi criado para automatizar parte dos testes:
+- Sobe o docker-compose
+- Valida saúde do sistema
+- Cria workflows de teste
+- Executa cenários básicos
+- Gera relatório em Markdown
+
+**Como usar:**
+```bash
+./teste-integrado-service-portal.sh
+```
+
+Gera logs em `teste-integrado-<timestamp>.log` e checklist em `teste-integrado-checklist-<timestamp>.md`.
+
+### Cenários a testar manualmente (WireMock)
+
+Os testes acima usam `api.exemplo.com` (alias WireMock). Verifique que:
+1. `GET /clients/{clientId}` retorna `{ "name": "Client Name", ... }` (mapping em `wiremock/mappings/`)
+2. Responses são templates via WireMock, simulando APIs externas reais
+3. Retry + Circuit Breaker funcionam (teste com WireMock derrubado)
+
+### Cenários para implementar (future)
+
+Se quiser adicionar testes integrados para:
+- **Validação de contrato avançada** (ex: custom validators)
+- **Cache Redis** (verificar warm-up e TTL)
+- **Auth de usuário final** (Authentik + PKCE)
+
+Preencha um formulário como abaixo:
+
+**Cenário a testar:**
+(descrição)
 
 **Componente alvo:**
-(ex: `generic-orchestrator` — `FlowValidationService`)
+(ex: generic-orchestrator, service-portal-bff, service-portal-manager, service-portal-frontend)
 
-**Arquivos relevantes:**
-(cole os arquivos ou liste os caminhos)
+**Arquivo(s) relevante(s):**
+(caminhos)
 
-**O que não quero que mude:**
-(ex: não usar Mockito para esse caso, usar apenas JUnit 5)
+**Validação esperada:**
+(ex: status HTTP, conteúdo de resposta, estado do MongoDB)
