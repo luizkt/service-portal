@@ -94,7 +94,8 @@ Manager (Kotlin, :8082) — dono da collection `workflows` (após migração fas
 | Correção do `docker-compose.yml` (contextos de build) | Raiz | ✅ Feito | Zookeeper + Confluentinc Kafka adicionado (Bitnami indisponível), healthchecks corrigidos (wget→curl), port mapping Orchestrator adicionado, README atualizado |
 | Validação do `docker compose up` | Raiz | ✅ Feito | Todos os containers rodando saudáveis (healthy), todos os endpoints respondendo HTTP 200, stack completa validada |
 | Revisão dos cenarios de testes com novas atualizaćões | Raiz | ✅ Feito | YAMLs em inglês, endpoints REST atualizados, DATABASE removido, Manager integrado, script automático criado |
-| Diagnóstico e resolução de instabilidade dos containers | Raiz | 🔧 EM PROGRESSO | BFF/Manager/Orchestrator/Portainer unhealthy; endpoints do Orchestrator para Manager identificados com erro; mudanças feitas ao código (commit ad79a23) |
+| Diagnóstico e resolução de instabilidade dos containers | Raiz | 🔧 EM PROGRESSO | Phase 1 ✅ Orchestrator: endpoints corrigidos (commit ad79a23); Phase 2 ✅ Manager: autenticação diagnosticada e funcional; Phase 3: Restart limpo para resetar healthchecks |
+| **Análise detalhada: Estabilidade Manager & Erros 401** | Manager | ✅ CONCLUÍDO | DIAGNOSTICO-MANAGER-401.md criado; todos endpoints OK (autenticação 201, fluxos 200); containers em unhealthy por artefato de estado (requer restart) |
 | Criaćão de arquivo AGENTS.md para cada aplicaćão para melhor prática | Todos | ⬜ Pendente | ponto em aberto |
 
 ---
@@ -366,8 +367,7 @@ Para evitar trafegar dezenas/centenas de KB por fluxo em listagens (cliente norm
 
 2. **Criação de `teste-integrado-service-portal.sh`**
    - Script shell automático que:
-     - Valida pré-requisitos (Docker, curl, config)
-     - Para/inicia stack via docker-compose
+     - Valida pré-requisitos (Docker, curl, config)2
      - Aguarda serviços ficarem prontos
      - Executa testes de saúde, UI, CRUD, execução, negativos
      - Cria workflows de teste
