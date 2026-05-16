@@ -107,29 +107,56 @@ portal-bff | [UP 7 minutes - unhealthy]
 
 ---
 
-## Próximas Etapas
+## ATUALIZAÇÃO: Investig ação de Cache Docker
 
-1. **Rebuild do Orchestrator**:
+### Problema Identificado
+
+Após corrigir os endpoints, os logs indicam que o código antigo ainda está sendo executado:
+
+1. ✅ Mudanças feitas no código-fonte:
+   - `/api/auth/login` → `/api/auth/tokens` (resolvido com sucesso)
+   - `/manager/workflows/active` → `/manager/flows?status=active` (código alterado, mas logs ainda mostram URL antiga)
+   - `/manager/workflows/{flowId}/{versao}/yaml` → `/manager/flows/{flowId}/versions/{versao}/yaml` (alterado)
+
+2. ⚠️ Compilação bem-sucedida:
+   - Gradle compile: ✅ BUILD SUCCESSFUL
+   - Docker build: ✅ orchestrator Built
+
+3. ❌ Execução do código: Mostra URLs antigas
+   - Logs mostram ainda: "401 Unauthorized from GET http://manager:8082/manager/workflows/active"
+   - Não deve acontecer se o código compilado fosse novo
+
+### Hipóteses
+
+- [ ] Cache do Docker builder (multi-stage) pode estar usando JAR antigo
+- [ ] Problema com classpath ou carregamento de classes no container
+- [ ] Bug em como o WebClient constrói a URI  
+- [ ] A exceção que aparece nos logs pode ser de cache antigo do Spring WebClientResponseException
+
+### Recomendação para Próxima Sessão
+
+1. **Limpar tudo completamente**:
    ```bash
-   docker compose -f docker-compose-service-portal.yml build orchestrator
+   docker compose -f docker-compose-service-portal.yml down
+   docker image prune -a --force
+   docker volume prune -f
    ```
 
-2. **Restart da stack**:
+2. **Fazer build sem cache**:
    ```bash
-   docker compose -f docker-compose-service-portal.yml restart
+   docker compose -f docker-compose-service-portal.yml build --no-cache --pull
    ```
 
-3. **Monitorar saúde** (aguardar ~2 min):
+3. **Testar manualmente o endpoint do Manager**:
    ```bash
-   docker compose -f docker-compose-service-portal.yml ps
+   # Obter token
+   TOKEN=$(curl -s -X POST http://localhost:8082/api/auth/tokens \
+     -H "Content-Type: application/json" \
+     -d '{"username":"admin","password":"admin"}' | grep -o '"token":"[^"]*' | cut -d'"' -f4)
+   
+   # Testar listActive endpoint
+   curl -H "Authorization: Bearer $TOKEN" http://localhost:8082/manager/flows?status=active
    ```
 
-4. **Testar endpoints**:
-   ```bash
-   curl http://localhost:8081/bff/health
-   curl http://localhost:8080/actuator/health
-   curl http://localhost:8082/actuator/health
-   ```
-
-5. **Se ainda houver problemas**: Revisar logs com `docker compose logs <service>`
+4. **Se o problema persistir**: Adicionar logs de debug no ManagerWorkflowClient.listActive() para ver qual URI é realmente enviada
 

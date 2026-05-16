@@ -94,6 +94,7 @@ Manager (Kotlin, :8082) — dono da collection `workflows` (após migração fas
 | Correção do `docker-compose.yml` (contextos de build) | Raiz | ✅ Feito | Zookeeper + Confluentinc Kafka adicionado (Bitnami indisponível), healthchecks corrigidos (wget→curl), port mapping Orchestrator adicionado, README atualizado |
 | Validação do `docker compose up` | Raiz | ✅ Feito | Todos os containers rodando saudáveis (healthy), todos os endpoints respondendo HTTP 200, stack completa validada |
 | Revisão dos cenarios de testes com novas atualizaćões | Raiz | ✅ Feito | YAMLs em inglês, endpoints REST atualizados, DATABASE removido, Manager integrado, script automático criado |
+| Diagnóstico e resolução de instabilidade dos containers | Raiz | 🔧 EM PROGRESSO | BFF/Manager/Orchestrator/Portainer unhealthy; endpoints do Orchestrator para Manager identificados com erro; mudanças feitas ao código (commit ad79a23) |
 | Criaćão de arquivo AGENTS.md para cada aplicaćão para melhor prática | Todos | ⬜ Pendente | ponto em aberto |
 
 ---
