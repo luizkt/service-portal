@@ -42,6 +42,7 @@ Usuário
 | kafka       | `confluentinc/cp-kafka:7.5.0`   | Broker para integrações QUEUE            |
 | localstack  | `localstack/localstack:3`       | Emulador AWS SQS para integrações QUEUE  |
 | wiremock    | `wiremock/wiremock:3.9.1`       | Simulador de APIs HTTP externas          |
+| portainer   | `portainer/portainer-ce:latest` | Gerenciamento e monitoramento de containers |
 
 ## Como rodar a stack completa
 
@@ -82,6 +83,7 @@ Acessos:
 | RabbitMQ   | http://localhost:15672       | Management UI (guest/guest)             |
 | WireMock   | http://localhost:18080/__admin | Mappings + admin                       |
 | LocalStack | http://localhost:4566        | SQS endpoint                            |
+| **Portainer** | **http://localhost:9001** | **Gerenciador de containers** |
 
 ## Composes isolados por aplicação
 
@@ -99,6 +101,29 @@ externo que injete as vars corretas.
 | [service-portal-bff/docker-compose.yml](service-portal-bff/docker-compose.yml)         | Authentik + Manager + Orchestrator + toda a infra | `docker compose up -d && ./gradlew bootRun`         |
 | [service-portal-frontend/docker-compose.yml](service-portal-frontend/docker-compose.yml) | BFF + cadeia completa                              | `docker compose up -d && npm install && npm run dev` |
 
+## Portainer — Monitoramento de Containers
+
+O **Portainer CE** é incluído para gerenciar e monitorar os containers Docker:
+
+**Acesso:** http://localhost:9001
+
+**Funcionalidades:**
+- 🐳 Ver status e logs de todos os containers
+- 📊 Monitorar uso de recursos (CPU, memória)
+- 🔧 Gerenciar networks, volumes, imagens
+- ⚙️ Reiniciar/pausar/remover containers via UI
+- 📈 Histórico e estatísticas
+
+**Primeiro acesso:**
+1. Abra http://localhost:9001
+2. Crie usuário admin (será solicitado na primeira execução)
+3. Conecte ao Docker local (aparece automaticamente)
+4. Explore containers em "Containers" → lista todos os 15 serviços
+
+**Dica:** Use para monitorar a saúde dos containers durante testes de carga ou troubleshooting.
+
+---
+
 ## Decisões arquiteturais
 
 - **Server Driven UI**: BFF expõe `/bff/menu` e `/bff/features/{id}/ui-schema`; o frontend é genérico.
@@ -109,6 +134,7 @@ externo que injete as vars corretas.
 - **Workflows persistem domínio via integrações HTTP downstream** — o Orchestrator não tem mais dependência direta com banco de dados.
 - **Cache de workflows** no Orchestrator (Redis, TTL 1h, warm-up no startup).
 - **Multi-instância de Kafka/RabbitMQ** via `orch-integrations` no `application.yml`, match por `id`.
+- **Monitoramento com Portainer** — gerenciamento centralizado de containers via UI web.
 
 ## Endpoints — visão geral
 

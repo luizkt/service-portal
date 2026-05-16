@@ -171,6 +171,20 @@ Padrão **sub-recursos** com versionamento explícito:
 
 ---
 
+## Monitoramento com Portainer
+
+Acesse **http://localhost:9001** para monitorar os containers em tempo real:
+
+1. **Containers**: status de cada serviço (healthy/running/exited)
+2. **Logs**: visualizar logs em tempo real de cada container
+3. **Stats**: CPU, memória, I/O por container
+4. **Networks**: visualizar conectividade entre serviços
+5. **Volumes**: gerenciar dados persistentes
+
+**Dica:** Abra Portainer durante a execução do script de testes para acompanhar recursos.
+
+---
+
 ## Troubleshooting
 
 ### Docker compose não inicia
@@ -178,11 +192,14 @@ Padrão **sub-recursos** com versionamento explícito:
 # Limpar state antigo
 docker compose -f docker-compose-service-portal.yml down -v
 
-# Verificar se há processospendurados
+# Verificar se há processos pendurados
 docker ps -a | grep -i service-portal
 
 # Reconstruir imagens
 docker compose -f docker-compose-service-portal.yml build --no-cache
+
+# Ver logs do Portainer (se houver erro de socket)
+docker logs portal-portainer
 ```
 
 ### Serviços não ficam healthy
@@ -231,9 +248,42 @@ docker exec <redis> redis-cli keys "*"
 
 ---
 
+## Ferramentas de Suporte
+
+### Portainer — Gerenciamento de Containers
+- **URL:** http://localhost:9001
+- **Uso:** monitorar status, logs e recursos dos containers
+- **Primeiro acesso:** crie usuário admin
+- **Benefícios:** visualizar saúde da stack em tempo real durante testes
+
+### Comandos Úteis
+```bash
+# Ver containers rodando
+docker ps
+
+# Ver logs de um serviço específico
+docker logs portal-bff -f
+
+# Executar comando dentro de um container
+docker exec -it portal-mongodb mongosh generic-orchestrator
+
+# Ver estatísticas de recursos
+docker stats --no-stream
+
+# Pausar/resumir container
+docker pause portal-orchestrator
+docker unpause portal-orchestrator
+
+# Reiniciar serviço
+docker compose -f docker-compose-service-portal.yml restart orchestrator
+```
+
+---
+
 ## Referências
 
 - [teste-integrado.md](teste-integrado.md) — cenários detalhados
 - [PLAN.md](PLAN.md) — progresso e decisões arquiteturais
 - [README.md](README.md) — visão geral do projeto
 - [arquitetura-portal-service.md](arquitetura-portal-service.md) — diagrama de arquitetura
+- http://localhost:9001 — **Portainer (gerenciamento visual)**

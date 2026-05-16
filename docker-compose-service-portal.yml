@@ -491,6 +491,40 @@ services:
     networks:
       - portal
 
+  # ---------------------------------------------------------------------------
+  # Portainer CE — gerenciamento e monitoramento de containers Docker
+  #
+  # Interface web para gerenciar containers, imagens, networks, volumes, etc.
+  # UI: http://localhost:9001
+  # Acesso inicial: admin / (senha criada na primeira execução)
+  # Edge Agent: porta 8000 (comunicação entre agents e server)
+  #
+  # Requisitos: acesso ao Docker socket (/var/run/docker.sock)
+  # ---------------------------------------------------------------------------
+  portainer:
+    image: portainer/portainer-ce:latest
+    container_name: portal-portainer
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    volumes:
+      - /etc/localtime:/etc/localtime:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - portainer_data:/data
+    ports:
+      - "${PORTAINER_PORT:-9001}:9000"
+      - "${PORTAINER_EDGE_PORT:-8000}:8000"
+    environment:
+      TZ: UTC
+    networks:
+      - portal
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:9000/api/system/status"]
+      start_period: 15s
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
 # =============================================================================
 # Volumes
 # =============================================================================
@@ -508,6 +542,8 @@ volumes:
   zookeeper_data:
     driver: local
   zookeeper_logs:
+    driver: local
+  portainer_data:
     driver: local
 
 # =============================================================================

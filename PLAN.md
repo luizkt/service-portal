@@ -16,9 +16,10 @@ Branch principal: `claude/projeto-base`
 | `service-portal-manager/` | Kotlin 2.0 + Spring Boot 3.4.5 + Gradle + MongoDB 7 | 8082 |
 | `service-portal-frontend/` | React 18 + TypeScript + Vite 5 | 5173 (dev) / 80 (prod) |
 
-**Infraestrutura local:** MongoDB 7, **Redis 7** (cache de workflows no orquestrador), RabbitMQ 3, Kafka (Bitnami 3.7 KRaft, sem Zookeeper), LocalStack 3 (SQS), WireMock (simulador de APIs externas)
+**Infraestrutura local:** MongoDB 7, **Redis 7** (cache), RabbitMQ 3, Kafka (Confluentinc 7.5.0 + Zookeeper), LocalStack 3 (SQS), WireMock (APIs externas), **Portainer CE** (gerenciamento de containers)
 **Segurança:** JWT HS512 (jjwt 0.12.6) no orquestrador; OAuth2 Resource Server (Authentik) no BFF
 **HTTP client:** Spring WebFlux WebClient (Netty)
+**Monitoramento:** Portainer CE via http://localhost:9001
 
 ---
 
