@@ -90,7 +90,10 @@ Manager (Kotlin, :8082) — dono da collection `workflows` (após migração fas
 | Refactor bff e orquestrador para novo service-portal-manager | BFF + Orquestrador | ✅ Feito | BFF→Manager (CRUD); Orquestrador→Manager (consulta) com cache Redis 1h |
 | Remoção do MongoDB do orquestrador | Orquestrador | ✅ Feito | `IntegrationType.DATABASE` extinto; sem dep `spring-boot-starter-data-mongodb` |
 | Refactor REST + tudo em inglês (paths, payloads, YAML) | Todos os serviços | ✅ Feito | Sub-recursos `versions/{v}` + `executions`; filtros via query params; `auth/tokens` |
-| Correção do `docker-compose.yml` (contextos de build) | Raiz | ⬜ Pendente | ponto em aberto |
+| Correção do `docker-compose.yml` (contextos de build) | Raiz | ✅ Feito | Zookeeper + Confluentinc Kafka adicionado (Bitnami indisponível), healthchecks corrigidos (wget→curl), port mapping Orchestrator adicionado, README atualizado |
+| Validação do `docker compose up` | Raiz | ✅ Feito | Todos os containers rodando saudáveis (healthy), todos os endpoints respondendo HTTP 200, stack completa validada |
+| Revisão dos cenarios de testes com novas atualizaćões | Raiz | ⬜ Pendente | ponto em aberto |
+| Criaćão de arquivo AGENTS.md para cada aplicaćão para melhor prática | Todos | ⬜ Pendente | ponto em aberto |
 
 ---
 
@@ -348,13 +351,13 @@ Para evitar trafegar dezenas/centenas de KB por fluxo em listagens (cliente norm
 
 ## Tarefa desta sessão
 
-> BUG má pratica utilizada na construćão de endpoints HTTP
+> Correção do `docker-compose.yml` (contextos de build)
 
 **Componente alvo:**
-`service-portal-manager`, `service-portal-bff`, `service-portal-frontend`, `generic-orchestrator` 
+`docker-compose-service-portal.yml`
 
 **O que quero fazer agora:**
-Vamos realizar uma validaćão em todos os endpoints de todos os servićos que temos e identificar pontos de boas praticas para serem seguidos, como por exemplo a URL /bff/flows/{flowId}/{versao}, deveria ser /bff/flows/{flowId}/versions/{versao}. Ou também esse aqui GET /workflows/active deveria ser um GET /workflows?status=active, dessa forma fica generico para outros fluxos existirem também. Aplique as boas praticas de construćão de API REST para remodelar essas APIs, implemente o que for necessario para atender as novas necessidade das boas praticas de coinstrućão de endpoints http rest.
+Vamos realizar uma validaćão no arquivo `docker-compose-service-portal.yml` para preparar o nosso ambiente de execućão com docker compose. Precisamos rodar as aplicaćões do frontend, bff, orquestrador e manager. A infra necessaria também é necessaria subir no docker compose para realizarmos testes integrados. Com o intuito dos testes precisamos garantir que teremos as configuraćões de integraćão corretas nos arquivos do docker compose, utilize as redes do docker-compose para realizar as integraćões bem como as variaveis de ambiente das aplicaćões para realizar as conexões necessarias.
 
 **Arquivos relevantes:**
 generic-orchestrator/README.md
@@ -366,7 +369,7 @@ service-portal-frontend/README.md
 - Testes unitários executando com sucesso.
 - Cobertura de codigo deve ser pelo menos 95%.
 - Imagem docker sendo construida com sucesso.
-- Atualizaćão dos README.md do orquestrador, BFF e a arquitetura-portal-service.
+- Atualizaćão dos README.md geral do projeto na raiz.
 
 **O que não quero que mude:**
-
+- As funcionalidades das aplicaćões, caso encontre algum problema me informe.

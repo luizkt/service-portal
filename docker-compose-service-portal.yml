@@ -197,26 +197,47 @@ services:
   # Modo KRaft (sem Zookeeper). Instância única para desenvolvimento.
   # ---------------------------------------------------------------------------
   kafka:
-    image: bitnami/kafka:3.7
+    image: confluentinc/cp-kafka:7.5.0
     container_name: portal-kafka
     restart: unless-stopped
     healthcheck:
-      test: ["CMD-SHELL", "kafka-topics.sh --bootstrap-server localhost:9092 --list 2>&1"]
+      test: ["CMD", "kafka-broker-api-versions", "--bootstrap-server=kafka:9092"]
       start_period: 30s
       interval: 15s
       timeout: 10s
       retries: 5
     environment:
-      KAFKA_CFG_NODE_ID:                         "1"
-      KAFKA_CFG_PROCESS_ROLES:                   controller,broker
-      KAFKA_CFG_CONTROLLER_QUORUM_VOTERS:        1@kafka:9093
-      KAFKA_CFG_LISTENERS:                       PLAINTEXT://:9092,CONTROLLER://:9093
-      KAFKA_CFG_ADVERTISED_LISTENERS:            PLAINTEXT://kafka:9092
-      KAFKA_CFG_LISTENER_SECURITY_PROTOCOL_MAP:  CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
-      KAFKA_CFG_CONTROLLER_LISTENER_NAMES:       CONTROLLER
-      ALLOW_PLAINTEXT_LISTENER:                  "yes"
+      KAFKA_BROKER_ID:                    1
+      KAFKA_ZOOKEEPER_CONNECT:            zookeeper:2181
+      KAFKA_ADVERTISED_LISTENERS:         PLAINTEXT://kafka:9092,PLAINTEXT_HOST://kafka:29092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME:   PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE:    "true"
+    ports:
+      - "9092:9092"
+      - "29092:29092"
+    depends_on:
+      - zookeeper
+    networks:
+      - portal
+
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.5.0
+    container_name: portal-zookeeper
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "bash", "-c", "echo ruok | nc localhost 2181"]
+      start_period: 15s
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME:   2000
     volumes:
-      - kafka_data:/bitnami/kafka
+      - zookeeper_data:/var/lib/zookeeper/data
+      - zookeeper_logs:/var/lib/zookeeper/log
     networks:
       - portal
 
@@ -234,12 +255,13 @@ services:
     container_name: portal-manager
     restart: unless-stopped
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://localhost:${MANAGER_INTERNAL_PORT:-8082}/actuator/health || exit 1"]
+      test: ["CMD-SHELL", "curl -sf http://localhost:${MANAGER_INTERNAL_PORT:-8082}/actuator/health || exit 1"]
       start_period: 60s
       interval: 15s
       timeout: 5s
       retries: 5
     environment:
+      SPRING_PROFILES_ACTIVE:   docker
       SERVER_PORT:              ${MANAGER_INTERNAL_PORT:-8082}
       MONGODB_URI:              mongodb://mongodb:27017/${MONGODB_DATABASE:-generic-orchestrator}
       MONGODB_DATABASE:         ${MONGODB_DATABASE:-generic-orchestrator}
@@ -278,6 +300,32 @@ services:
       - portal
 
   # ---------------------------------------------------------------------------
+  # LocalStack — emulador local de serviços AWS (apenas SQS habilitado)
+  #
+  # Usado pelas integrações QUEUE com provider SQS nos workflows. As credenciais
+  # padrão (test/test) e a região (us-east-1) são valores convencionais do
+  # LocalStack — não correspondem a credenciais AWS reais.
+  # ---------------------------------------------------------------------------
+  localstack:
+    image: localstack/localstack:3
+    container_name: portal-localstack
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:4566/_localstack/health | grep -q '\"sqs\": \"\\(available\\|running\\)\"' || exit 1"]
+      start_period: 20s
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    environment:
+      SERVICES:       sqs
+      DEFAULT_REGION: ${AWS_REGION:-us-east-1}
+      DEBUG:          "0"
+    ports:
+      - "${LOCALSTACK_PORT:-4566}:4566"
+    networks:
+      - portal
+
+  # ---------------------------------------------------------------------------
   # WireMock — simulador de APIs HTTP externas usadas pelos workflows
   #
   # Mappings/stubs em ./wiremock/mappings, response files em ./wiremock/__files.
@@ -291,7 +339,7 @@ services:
     restart: unless-stopped
     command: ["--port", "8080", "--global-response-templating", "--verbose"]
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://localhost:8080/__admin/health || exit 1"]
+      test: ["CMD-SHELL", "curl -sf http://localhost:8080/__admin/health || exit 1"]
       start_period: 10s
       interval: 15s
       timeout: 5s
@@ -322,7 +370,7 @@ services:
     container_name: portal-orchestrator
     restart: unless-stopped
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://localhost:${ORCHESTRATOR_INTERNAL_PORT:-8080}/actuator/health || exit 1"]
+      test: ["CMD-SHELL", "curl -sf http://localhost:${ORCHESTRATOR_INTERNAL_PORT:-8080}/actuator/health || exit 1"]
       start_period: 60s
       interval: 15s
       timeout: 5s
@@ -348,9 +396,11 @@ services:
       KAFKA_BOOTSTRAP_SERVERS:      kafka:9092
       KAFKA_BOOTSTRAP_SERVERS_1:    kafka:9092
       AWS_REGION:                   ${AWS_REGION:-us-east-1}
-      AWS_SQS_ENDPOINT:             ${AWS_SQS_ENDPOINT:-}
-      AWS_ACCESS_KEY_ID:            ${AWS_ACCESS_KEY_ID:-}
-      AWS_SECRET_ACCESS_KEY:        ${AWS_SECRET_ACCESS_KEY:-}
+      AWS_SQS_ENDPOINT:             ${AWS_SQS_ENDPOINT:-http://localstack:4566}
+      AWS_ACCESS_KEY_ID:            ${AWS_ACCESS_KEY_ID:-test}
+      AWS_SECRET_ACCESS_KEY:        ${AWS_SECRET_ACCESS_KEY:-test}
+    ports:
+      - "${ORCHESTRATOR_PORT:-8080}:${ORCHESTRATOR_INTERNAL_PORT:-8080}"
     depends_on:
       redis:
         condition: service_healthy
@@ -358,9 +408,13 @@ services:
         condition: service_healthy
       kafka:
         condition: service_healthy
+      zookeeper:
+        condition: service_healthy
       wiremock:
         condition: service_healthy
       manager:
+        condition: service_healthy
+      localstack:
         condition: service_healthy
     networks:
       - portal
@@ -381,23 +435,26 @@ services:
     container_name: portal-bff
     restart: unless-stopped
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://localhost:${BFF_INTERNAL_PORT:-8081}/bff/health || exit 1"]
+      test: ["CMD-SHELL", "curl -sf http://localhost:${BFF_INTERNAL_PORT:-8081}/bff/health || exit 1"]
       start_period: 45s
       interval: 15s
       timeout: 5s
       retries: 5
     environment:
-      SERVER_PORT:           ${BFF_INTERNAL_PORT:-8081}
-      ORCHESTRATOR_URL:      http://orchestrator:${ORCHESTRATOR_INTERNAL_PORT:-8080}
-      ORCHESTRATOR_USERNAME: ${ORCHESTRATOR_USERNAME:-admin}
-      ORCHESTRATOR_PASSWORD: ${ORCHESTRATOR_PASSWORD:-admin}
-      MANAGER_URL:           http://manager:${MANAGER_INTERNAL_PORT:-8082}
-      MANAGER_USERNAME:      ${MANAGER_ADMIN_USERNAME:-admin}
-      MANAGER_PASSWORD:      ${MANAGER_ADMIN_PASSWORD:-admin}
+      SPRING_PROFILES_ACTIVE: docker
+      SERVER_PORT:            ${BFF_INTERNAL_PORT:-8081}
+      ORCHESTRATOR_URL:       http://orchestrator:${ORCHESTRATOR_INTERNAL_PORT:-8080}
+      ORCHESTRATOR_USERNAME:  ${ORCHESTRATOR_USERNAME:-admin}
+      ORCHESTRATOR_PASSWORD:  ${ORCHESTRATOR_PASSWORD:-admin}
+      MANAGER_URL:            http://manager:${MANAGER_INTERNAL_PORT:-8082}
+      MANAGER_USERNAME:       ${MANAGER_ADMIN_USERNAME:-admin}
+      MANAGER_PASSWORD:       ${MANAGER_ADMIN_PASSWORD:-admin}
       # JWKS_URI: URL interna do Authentik (resolução via DNS do Docker)
-      AUTHENTIK_JWKS_URI:    http://authentik-server:9000/application/o/${AUTHENTIK_APP_SLUG:-service-portal}/jwks/
+      AUTHENTIK_JWKS_URI:     http://authentik-server:9000/application/o/${AUTHENTIK_APP_SLUG:-service-portal}/jwks/
       # ISSUER_URI: URL pública que aparece no claim "iss" dos tokens emitidos
-      AUTHENTIK_ISSUER_URI:  http://localhost:${AUTHENTIK_PORT_HTTP:-9000}/application/o/${AUTHENTIK_APP_SLUG:-service-portal}/
+      AUTHENTIK_ISSUER_URI:   http://localhost:${AUTHENTIK_PORT_HTTP:-9000}/application/o/${AUTHENTIK_APP_SLUG:-service-portal}/
+      # CLIENT_ID: client público SPA cadastrado no Authentik
+      AUTHENTIK_CLIENT_ID:    ${AUTHENTIK_CLIENT_ID:-service-portal-spa}
     ports:
       - "${BFF_PORT:-8081}:${BFF_INTERNAL_PORT:-8081}"
     depends_on:
@@ -423,12 +480,6 @@ services:
       dockerfile: Dockerfile
     container_name: portal-frontend
     restart: unless-stopped
-    healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://localhost/ || exit 1"]
-      start_period: 20s
-      interval: 15s
-      timeout: 5s
-      retries: 5
     environment:
       BFF_URL:    http://bff:${BFF_INTERNAL_PORT:-8081}
       NGINX_PORT: ${FRONTEND_INTERNAL_PORT:-80}
@@ -454,7 +505,9 @@ volumes:
     driver: local
   rabbitmq_data:
     driver: local
-  kafka_data:
+  zookeeper_data:
+    driver: local
+  zookeeper_logs:
     driver: local
 
 # =============================================================================
