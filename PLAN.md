@@ -97,7 +97,9 @@ Manager (Kotlin, :8082) — dono da collection `workflows` (após migração fas
 | Diagnóstico e resolução de instabilidade dos containers | Raiz | ✅ CONCLUÍDO | Phase 1 ✅ Orchestrator (endpoints corrigidos); Phase 2 ✅ Manager (autenticação OK); Phase 3 ✅ Docker curl fix (containers healthy) |
 | **Análise detalhada: Estabilidade Manager & Erros 401** | Manager | ✅ CONCLUÍDO | DIAGNOSTICO-MANAGER-401.md; todos endpoints OK; containers healthy após curl fix |
 | **Fix Crítico: Healthcheck dos Containers** | Raiz | ✅ CONCLUÍDO | DIAGNOSTICO-HEALTHCHECK-CURL.md; Dockerfiles + apk curl; Manager/Orchestrator/BFF → HEALTHY ✅ |
+| **Diagnóstico dos Testes Integrados (v1)** | Raiz | ✅ CONCLUÍDO | Executado script v1; taxa 25% (5/20 passaram); 5 problemas catalogados; script v2 criado |
 | Criaćão de arquivo AGENTS.md para cada aplicaćão para melhor prática | Todos | ⬜ Pendente | ponto em aberto |
+| **Corrigir testes integrados** | Raiz + BFF | ⬜ Pendente | 5 problemas identificados — ver seção abaixo |
 
 ---
 
@@ -353,7 +355,7 @@ Para evitar trafegar dezenas/centenas de KB por fluxo em listagens (cliente norm
 
 ---
 
-## Tarefa desta sessão — CONCLUÍDA ✅
+## Sessão anterior — CONCLUÍDA ✅
 
 > Revisão dos cenarios de testes com novas atualizaćões e execućão como validaćão
 
@@ -408,3 +410,93 @@ Para evitar trafegar dezenas/centenas de KB por fluxo em listagens (cliente norm
 - ✅ Funcionalidades das aplicações — nenhuma alteração de código em componentes
 - ✅ Stacks (Java 21, Kotlin 2.0, React 18, etc.)
 - ✅ Decisões arquiteturais já consolidadas
+
+---
+
+## Sessão mais recente — CONCLUÍDA ✅
+
+> Diagnóstico e manutenção dos testes integrados (execução do script v1 + análise dos resultados)
+
+### O que foi feito
+
+1. **Execução do script v1** (`teste-integrado-service-portal.sh`)
+   - Log capturado em `teste-integrado-20260516-204125.log`
+   - 20 testes executados; **5 passaram (25%), 15 falharam ou foram pulados**
+   - Checklist gerado em `teste-integrado-checklist-20260516-204125.md`
+
+2. **Análise completa das falhas** — `DIAGNOSTICO-TESTES-INTEGRADOS.md`
+
+   | # | Problema | Severidade | Esforço |
+   |---|---|---|---|
+   | 1 | RabbitMQ — endpoint `/api/health` não existe (correto: `/api/aliveness-test/%2F`) | Baixa | ⚡ 30 min |
+   | 2 | BFF retorna 401 em todos os endpoints — script não envia Bearer token Authentik | Alta | 🟡 1-2h |
+   | 3 | `GET /bff/menu` e `GET /bff/features/flow-manager/ui-schema` — schema/menu não retornam dados esperados | Média | 🟡 1-2h |
+   | 4 | `POST /bff/flows` — criação de workflow retorna 401 (bloqueado pelo #2) | Alta | (depende do #2) |
+   | 5 | Cascata de dependências — CRUD e execução falham porque a criação falhou | Alta | (depende do #4) |
+
+3. **Plano de ação** — `RECOMENDACOES-TESTES-INTEGRADOS.md`
+   - 5 fases detalhadas com comandos prontos
+   - Taxa de sucesso esperada após correções: 80%+
+
+4. **Script v2** — `teste-integrado-service-portal-v2.sh`
+   - Suporte a autenticação Manager e Authentik (Bearer token)
+   - Modo DEBUG com logging detalhado
+   - Error handling robusto com `jq`
+   - Fallback de endpoints
+
+5. **Documentação** — `TESTES-README.md`, `PROXIMAS-ETAPAS-TESTES.md`, `RESUMO-SESSAO-TESTES.md`
+
+### Arquivos criados
+
+- `DIAGNOSTICO-TESTES-INTEGRADOS.md` — análise de causas raiz por problema
+- `RECOMENDACOES-TESTES-INTEGRADOS.md` — plano de ação em 5 fases
+- `teste-integrado-service-portal-v2.sh` — script melhorado com autenticação
+- `TESTES-README.md` — guia de uso e troubleshooting
+- `PROXIMAS-ETAPAS-TESTES.md` — checklist acionável de próximas etapas
+- `RESUMO-SESSAO-TESTES.md` — consolidação executiva da sessão
+
+---
+
+## Próximos passos — Decisão necessária
+
+Temos 3 caminhos possíveis a partir daqui. Escolha um:
+
+### Opção A — Corrigir os testes integrados (prioridade)
+
+Sequência recomendada (menor para maior esforço):
+
+1. **[⚡ 30 min] Corrigir endpoint RabbitMQ no script** — trivial, sem toque em código de aplicação
+   - Arquivo: `teste-integrado-service-portal.sh` linha com `/api/health` → `/api/aliveness-test/%2F`
+
+2. **[🟡 1-2h] Resolver autenticação BFF no script** — entender se BFF exige Bearer Authentik ou se aceita direto
+   - Investigar: `curl -v http://localhost:8081/bff/menu` (sem token) — se retornar 401, BFF exige Authentik
+   - Se sim: configurar Authentik no docker-compose + obter token no script v2
+   - Se não: há outro problema nos endpoints
+
+3. **[🟡 1-2h] Validar Server Driven UI (menu + schema)** — dependente do #2
+   - Verificar se dados de menu estão populados no BFF para `flow-manager`
+
+4. **[⬜ follow-up] Rodar script v2** e medir nova taxa de sucesso
+
+**Meta**: chegar em 80%+ de testes passando.
+
+---
+
+### Opção B — Criar `AGENTS.md` por componente
+
+Item em aberto mais antigo. Baixo risco, sem impacto em runtime:
+
+- ✅ `generic-orchestrator/AGENTS.md` — criado
+- ✅ `service-portal-bff/AGENTS.md` — criado
+- ✅ `service-portal-manager/AGENTS.md` — criado
+- ✅ `service-portal-frontend/AGENTS.md` — criado
+
+---
+
+### Opção C — Nova feature de produto
+
+Iniciar a próxima evolução arquitetural. Possíveis candidatas:
+
+- **Invalidação proativa de cache** — Manager notifica orquestrador via Redis Pub/Sub quando workflow é atualizado (em vez de esperar TTL 1h)
+- **Endpoint admin de cache** — `DELETE /api/admin/cache/workflows/{flowId}` no orquestrador
+- **Authentik no docker-compose** — containerizar Authentik para que o fluxo OAuth2/PKCE funcione localmente sem setup manual
