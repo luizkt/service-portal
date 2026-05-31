@@ -23,13 +23,15 @@
 #        echo "AUTHENTIK_SECRET_KEY=$(openssl rand -base64 60 | tr -d '\n')" >> .env
 #        echo "ORCHESTRATOR_JWT_SECRET=$(openssl rand -base64 60 | tr -d '\n')" >> .env
 #   3. docker compose up -d
-#   4. http://localhost:9000/if/flow/initial-setup/ → crie o admin Authentik
-#   5. Crie uma aplicação OAuth2/OIDC Provider no Authentik
-#        Admin → Applications → Providers → Create → OAuth2/OIDC Provider
-#        Em seguida: Applications → Create → vincule ao Provider
-#        Anote o Application Slug (ex: service-portal)
-#   6. Defina AUTHENTIK_APP_SLUG=<seu-slug> no .env
-#   7. docker compose restart bff
+#
+# O Authentik é configurado automaticamente:
+#   • Admin: admin@sp.local / (AUTHENTIK_ADMIN_PASSWORD, default: admin)
+#   • OAuth2 SPA Provider:  client_id=service-portal-spa  (PKCE, público)
+#   • OAuth2 M2M Provider:  client_id=service-portal-m2m  (client_credentials)
+#   • Usuário de teste:     testuser / testpass123
+#
+# Setup manual NÃO é mais necessário. O blueprint em authentik/blueprints/
+# é aplicado pelo worker automaticamente na inicialização.
 #
 # =============================================================================
 
@@ -91,6 +93,10 @@ services:
       AUTHENTIK_POSTGRESQL__NAME:     ${PG_DB:-authentik}
       AUTHENTIK_POSTGRESQL__PASSWORD: ${PG_PASS}
       AUTHENTIK_LOG_LEVEL:            info
+      # Bootstrap: cria o admin automaticamente (pula a tela /if/flow/initial-setup/)
+      AUTHENTIK_BOOTSTRAP_EMAIL:      ${AUTHENTIK_ADMIN_EMAIL:-admin@sp.local}
+      AUTHENTIK_BOOTSTRAP_PASSWORD:   ${AUTHENTIK_ADMIN_PASSWORD:-admin}
+      AUTHENTIK_BOOTSTRAP_TOKEN:      ${AUTHENTIK_BOOTSTRAP_TOKEN:-sp-bootstrap-token}
       # Email — descomente para habilitar recuperação de senha e alertas
       # AUTHENTIK_EMAIL__HOST:        smtp.example.com
       # AUTHENTIK_EMAIL__PORT:        587
@@ -132,10 +138,21 @@ services:
       AUTHENTIK_POSTGRESQL__NAME:     ${PG_DB:-authentik}
       AUTHENTIK_POSTGRESQL__PASSWORD: ${PG_PASS}
       AUTHENTIK_LOG_LEVEL:            info
+      # Bootstrap: mesmo valor do server para o worker criar o admin
+      AUTHENTIK_BOOTSTRAP_EMAIL:      ${AUTHENTIK_ADMIN_EMAIL:-admin@sp.local}
+      AUTHENTIK_BOOTSTRAP_PASSWORD:   ${AUTHENTIK_ADMIN_PASSWORD:-admin}
+      AUTHENTIK_BOOTSTRAP_TOKEN:      ${AUTHENTIK_BOOTSTRAP_TOKEN:-sp-bootstrap-token}
+      # Variáveis lidas pelo blueprint service-portal.yml
+      AUTHENTIK_CLIENT_ID:            ${AUTHENTIK_CLIENT_ID:-service-portal-spa}
+      AUTHENTIK_APP_SLUG:             ${AUTHENTIK_APP_SLUG:-service-portal}
+      AUTHENTIK_M2M_SECRET:           ${AUTHENTIK_M2M_SECRET:-service-portal-m2m-secret}
+      AUTHENTIK_TEST_PASSWORD:        ${AUTHENTIK_TEST_PASSWORD:-testpass123}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - authentik_media:/media
       - authentik_templates:/templates
+      # Blueprint aplicado automaticamente pelo worker na inicialização
+      - ./authentik/blueprints:/blueprints/custom
     depends_on:
       postgresql:
         condition: service_healthy
@@ -449,12 +466,15 @@ services:
       MANAGER_URL:            http://manager:${MANAGER_INTERNAL_PORT:-8082}
       MANAGER_USERNAME:       ${MANAGER_ADMIN_USERNAME:-admin}
       MANAGER_PASSWORD:       ${MANAGER_ADMIN_PASSWORD:-admin}
-      # JWKS_URI: URL interna do Authentik (resolução via DNS do Docker)
-      AUTHENTIK_JWKS_URI:     http://authentik-server:9000/application/o/${AUTHENTIK_APP_SLUG:-service-portal}/jwks/
-      # ISSUER_URI: URL pública que aparece no claim "iss" dos tokens emitidos
-      AUTHENTIK_ISSUER_URI:   http://localhost:${AUTHENTIK_PORT_HTTP:-9000}/application/o/${AUTHENTIK_APP_SLUG:-service-portal}/
+      # JWKS_URI: endpoint do provider SPA (todos os providers de uma instância compartilham a mesma chave de assinatura)
+      AUTHENTIK_JWKS_URI:         http://authentik-server:9000/application/o/${AUTHENTIK_APP_SLUG:-service-portal}/jwks/
+      # ISSUER_URI: claim "iss" dos tokens SPA (authorization_code + PKCE)
+      AUTHENTIK_ISSUER_URI:       http://localhost:${AUTHENTIK_PORT_HTTP:-9000}/application/o/${AUTHENTIK_APP_SLUG:-service-portal}/
+      # M2M_ISSUER_URI: claim "iss" dos tokens M2M (client_credentials — usado nos testes)
+      # Em instalações existentes, sobrescreva no .env: AUTHENTIK_M2M_APP_SLUG=service-portal-cc
+      AUTHENTIK_M2M_ISSUER_URI:   http://localhost:${AUTHENTIK_PORT_HTTP:-9000}/application/o/${AUTHENTIK_M2M_APP_SLUG:-service-portal-m2m}/
       # CLIENT_ID: client público SPA cadastrado no Authentik
-      AUTHENTIK_CLIENT_ID:    ${AUTHENTIK_CLIENT_ID:-service-portal-spa}
+      AUTHENTIK_CLIENT_ID:        ${AUTHENTIK_CLIENT_ID:-service-portal-spa}
     ports:
       - "${BFF_PORT:-8081}:${BFF_INTERNAL_PORT:-8081}"
     depends_on:

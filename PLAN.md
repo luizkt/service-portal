@@ -98,8 +98,9 @@ Manager (Kotlin, :8082) — dono da collection `workflows` (após migração fas
 | **Análise detalhada: Estabilidade Manager & Erros 401** | Manager | ✅ CONCLUÍDO | DIAGNOSTICO-MANAGER-401.md; todos endpoints OK; containers healthy após curl fix |
 | **Fix Crítico: Healthcheck dos Containers** | Raiz | ✅ CONCLUÍDO | DIAGNOSTICO-HEALTHCHECK-CURL.md; Dockerfiles + apk curl; Manager/Orchestrator/BFF → HEALTHY ✅ |
 | **Diagnóstico dos Testes Integrados (v1)** | Raiz | ✅ CONCLUÍDO | Executado script v1; taxa 25% (5/20 passaram); 5 problemas catalogados; script v2 criado |
-| Criaćão de arquivo AGENTS.md para cada aplicaćão para melhor prática | Todos | ⬜ Pendente | ponto em aberto |
-| **Corrigir testes integrados** | Raiz + BFF | ⬜ Pendente | 5 problemas identificados — ver seção abaixo |
+| Criação de arquivo AGENTS.md para cada aplicação | Todos | ✅ Feito | generic-orchestrator, bff, manager, frontend |
+| **Corrigir testes integrados** | Raiz + BFF | ✅ Feito | Script v3 criado; 32/33 (96%) passando, 0 falhas; 1 skipped = aviso jq ausente |
+| **Authentik automático no docker-compose** | Raiz + BFF | ✅ Feito | Blueprint `/authentik/blueprints/service-portal.yml`; bootstrap vars; BFF multi-issuer JWT; global token endpoint; script v3 integrado com `.env` sourcing |
 
 ---
 
@@ -499,4 +500,4 @@ Iniciar a próxima evolução arquitetural. Possíveis candidatas:
 
 - **Invalidação proativa de cache** — Manager notifica orquestrador via Redis Pub/Sub quando workflow é atualizado (em vez de esperar TTL 1h)
 - **Endpoint admin de cache** — `DELETE /api/admin/cache/workflows/{flowId}` no orquestrador
-- **Authentik no docker-compose** — containerizar Authentik para que o fluxo OAuth2/PKCE funcione localmente sem setup manual
+- ~~**Authentik no docker-compose**~~ — ✅ Feito: blueprint auto-aplica providers SPA + M2M; BFF aceita tokens de múltiplos issuers; testes integrados chegaram a 96% (32/33)

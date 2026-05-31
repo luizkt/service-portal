@@ -1,0 +1,96 @@
+# Blueprint Authentik — Service Portal
+# Aplicado automaticamente pelo authentik-worker na inicialização.
+# Cria o OAuth2 Provider SPA (PKCE, público) e o Provider M2M (client_credentials).
+#
+# Labels:
+#   blueprints.goauthentik.io/instantiate: "true"  → aplica ao importar (comportamento padrão
+#   para blueprints em /blueprints/custom/)
+#
+# Referências de flows:
+#   default-provider-authorization-implicit-consent — autoriza sem exibir tela de consentimento
+#   default-authentication-flow                     — autentica usuário/client com username+senha
+
+version: 1
+metadata:
+  name: service-portal
+  labels:
+    blueprints.goauthentik.io/instantiate: "true"
+
+entries:
+
+  # ─── 1. OAuth2 Provider SPA (público — PKCE, sem client_secret) ────────────
+  # Usado pelo frontend React em fluxo Authorization Code + PKCE (S256).
+  # client_type: public → Authentik não exige client_secret no token exchange.
+  - model: authentik_providers_oauth2.oauth2provider
+    state: present
+    identifiers:
+      name: service-portal-spa
+    attrs:
+      name: service-portal-spa
+      authorization_flow: !Find [authentik_flows.flow, [slug, default-provider-authorization-implicit-consent]]
+      client_type: public
+      client_id: !Env [AUTHENTIK_CLIENT_ID, service-portal-spa]
+      # Redirect URIs aceitas (separadas por newline)
+      redirect_uris: "http://localhost:5173/auth/callback\nhttp://localhost/auth/callback"
+      sub_mode: hashed_user_id
+      include_claims_in_id_token: true
+      access_code_validity: minutes=1
+      access_token_validity: hours=1
+      refresh_token_validity: days=30
+
+  # ─── 2. Aplicação SPA ──────────────────────────────────────────────────────
+  # Slug define a URL pública: /application/o/{slug}/
+  # O claim "iss" dos tokens será: http://localhost:9000/application/o/{slug}/
+  - model: authentik_core.application
+    state: present
+    identifiers:
+      slug: !Env [AUTHENTIK_APP_SLUG, service-portal]
+    attrs:
+      name: Service Portal
+      slug: !Env [AUTHENTIK_APP_SLUG, service-portal]
+      provider: !Find [authentik_providers_oauth2.oauth2provider, [name, service-portal-spa]]
+
+  # ─── 3. OAuth2 Provider M2M (confidencial — client_credentials) ────────────
+  # Usado pelo script de testes integrados para obter token sem interação de usuário.
+  # client_type: confidential → requer client_id + client_secret no token request.
+  # grant_type: client_credentials → POST /application/o/service-portal-m2m/token/
+  #   com grant_type=client_credentials&client_id=...&client_secret=...
+  - model: authentik_providers_oauth2.oauth2provider
+    state: present
+    identifiers:
+      name: service-portal-m2m
+    attrs:
+      name: service-portal-m2m
+      authorization_flow: !Find [authentik_flows.flow, [slug, default-provider-authorization-implicit-consent]]
+      client_type: confidential
+      client_id: service-portal-m2m
+      client_secret: !Env [AUTHENTIK_M2M_SECRET, service-portal-m2m-secret]
+      sub_mode: hashed_user_id
+      include_claims_in_id_token: true
+      access_token_validity: hours=1
+
+  # ─── 4. Aplicação M2M ──────────────────────────────────────────────────────
+  # Issuer dos tokens M2M: http://localhost:9000/application/o/service-portal-m2m/
+  # O BFF é configurado para aceitar tokens de AMBOS os issuers (SPA + M2M).
+  - model: authentik_core.application
+    state: present
+    identifiers:
+      slug: service-portal-m2m
+    attrs:
+      name: Service Portal M2M
+      slug: service-portal-m2m
+      provider: !Find [authentik_providers_oauth2.oauth2provider, [name, service-portal-m2m]]
+
+  # ─── 5. Usuário de teste ───────────────────────────────────────────────────
+  # Conta criada automaticamente para login no frontend durante desenvolvimento local.
+  # Credenciais: testuser / (AUTHENTIK_TEST_PASSWORD ou 'testpass123')
+  - model: authentik_core.user
+    state: present
+    identifiers:
+      username: testuser
+    attrs:
+      username: testuser
+      email: testuser@sp.local
+      name: Test User
+      is_active: true
+      password: !Env [AUTHENTIK_TEST_PASSWORD, testpass123]
