@@ -101,6 +101,10 @@ Manager (Kotlin, :8082) — dono da collection `workflows` (após migração fas
 | Criação de arquivo AGENTS.md para cada aplicação | Todos | ✅ Feito | generic-orchestrator, bff, manager, frontend |
 | **Corrigir testes integrados** | Raiz + BFF | ✅ Feito | Script v3 criado; 32/33 (96%) passando, 0 falhas; 1 skipped = aviso jq ausente |
 | **Authentik automático no docker-compose** | Raiz + BFF | ✅ Feito | Blueprint `/authentik/blueprints/service-portal.yml`; bootstrap vars; BFF multi-issuer JWT; global token endpoint; script v3 integrado com `.env` sourcing |
+| **Grupos de acesso + autorização por grupo** | Authentik + BFF | ✅ Feito | Blueprint: grupos ADMIN/RULES/WORKFLOWS + usuários it/bizop/workop; scope mapping `groups` claim no JWT; `@EnableMethodSecurity` + `JwtAuthenticationConverter`; `@PreAuthorize` em FlowProxyController; 40 testes passando |
+| **Tela de login com formulário + acesso por grupo** | Frontend | ✅ Feito | ROPC grant via `loginWithPassword`; `decodeJwtPayload` extrai groups do JWT; sidebar com nome+badge por grupo; welcome screen com perfil de acesso; 69 testes, 100% coverage |
+| **Versionamento semântico automático no update de workflow** | Manager | ✅ Feito | `PUT /manager/flows/{flowId}/versions/{v}` mantém versão antiga ativa e cria nova via SemVer 2.0.0 (MAJOR=contract, MINOR=integrations, PATCH=description); `GET /manager/flows` lista somente ativos; 71 testes, cobertura ≥ 95% |
+| **Endpoint de histórico de versões** | Manager | ✅ Feito | `GET /manager/flows/{flowId}/versions?status=active\|inactive` lista todas as versões (ou filtra); 76 testes, cobertura ≥ 95% |
 
 ---
 
@@ -213,6 +217,13 @@ Manager (Kotlin, :8082) — dono da collection `workflows` (após migração fas
   - JaCoCo gate ≥ 95% expandido — inclui `ManagerClient`, `ManagerAuthService`, `OrchestratorClient`, `OrchestratorAuthService`, `FlowProxyController`, `ManagerProperties`, `BffProperties`. Atual: **100%** INSTRUCTION (661/661)
   - Testes: `ManagerClientTest` (7 casos com MockWebServer), `ManagerAuthServiceTest` (3), `OrchestratorAuthServiceTest` (2), `OrchestratorClientTest` (1), `FlowProxyControllerTest` (11). `SecurityConfigIT` ganhou `@MockBean` para `ManagerAuthService`/`ManagerClient`
 
+- **Grupos de acesso + autorização por grupo no BFF**:
+  - `@EnableMethodSecurity` em `SecurityConfig` habilita `@PreAuthorize` nos controllers
+  - `JwtAuthenticationConverter` bean: lê claim `groups` do JWT, converte cada nome em `GrantedAuthority` sem prefixo (`ADMIN`, `WORKFLOWS`, `RULES`)
+  - `FlowProxyController` anotado com `@PreAuthorize("hasAnyAuthority('ADMIN', 'WORKFLOWS')")` — acesso a todos os endpoints de flows/executions exige grupo ADMIN ou WORKFLOWS
+  - Scope `groups` adicionado a `bff.auth.scopes` (`application.yml` + `application-docker.yml`) → frontend o solicita no fluxo PKCE → Authentik inclui `groups` no JWT
+  - 4 novos testes em `SecurityConfigIT`: WORKFLOWS→200, ADMIN→200, RULES→403, sem grupos→403; 40 testes total, 0 falhas, cobertura mantida ≥ 95%
+
 ### ⬜ Pendente
 
 (nenhum item pendente neste componente)
@@ -291,9 +302,35 @@ Para evitar trafegar dezenas/centenas de KB por fluxo em listagens (cliente norm
 
 > A solução continua sendo `yamlContent` como string. Alternativas (GridFS, S3, schema parseado) ficam reservadas para o caso (improvável) de workflows multi-MB ou requisitos de query do tipo "workflows que usam Kafka".
 
+### ✅ Versionamento semântico automático no update
+
+- **`VersioningService`** — detecta tipo de mudança comparando seções do YAML (normalização JSON para comparação agnóstica a formatação):
+  - `contract` alterado → `MAJOR` (reset minor+patch)
+  - `integrations` alterado → `MINOR` (reset patch)
+  - Qualquer outra mudança → `PATCH` (increment patch)
+  - Precedência: MAJOR > MINOR > PATCH quando múltiplas seções mudam
+- **`PUT /manager/flows/{flowId}/versions/{v}`**:
+  - Desativa versão existente (`active = false`)
+  - Calcula nova versão via SemVer
+  - Cria novo documento com nova versão e YAML atualizado (campo `flow.version` sincronizado)
+  - Retorna **201 Created** + header `Location: /manager/flows/{flowId}/versions/{newVersion}`
+- **`GET /manager/flows`** (listagem paginada): agora retorna **somente workflows ativos** — novo `findAllByActiveTrue(pageable)` no repository
+- **`GET /manager/flows?status=active`** (para o orquestrador): inalterado, continua não paginado
+- **Validação**: `flow.id` no YAML deve corresponder ao `flowId` do path; versão no YAML é ignorada (sobrescrita pela calculada)
+- **Testes**: 71 testes (0 falhas), cobertura ≥ 95% INSTRUCTION
+
+### ✅ Endpoint de histórico de versões
+
+- `GET /manager/flows/{flowId}/versions` — todas as versões de um flow (ativas + inativas), ordenadas por `version ASC`
+- `GET /manager/flows/{flowId}/versions?status=active` — somente versões ativas
+- `GET /manager/flows/{flowId}/versions?status=inactive` — somente versões desativadas (histórico/auditoria)
+- Resposta: `List<FlowSummaryDto>` sem `yamlContent` (leve)
+- Implementado em repository (`findAllByFlowId`, `findAllByFlowIdAndActive`) + `FlowDocumentService.listVersions()` + `FlowController.listVersions()`
+- **76 testes, 0 falhas**, cobertura ≥ 95%
+
 ### ⬜ Pendente
 
-(nenhum item pendente neste componente — refactor do BFF e orquestrador para consumir o Manager são tarefas separadas)
+(nenhum item pendente neste componente)
 
 ---
 
@@ -501,3 +538,42 @@ Iniciar a próxima evolução arquitetural. Possíveis candidatas:
 - **Invalidação proativa de cache** — Manager notifica orquestrador via Redis Pub/Sub quando workflow é atualizado (em vez de esperar TTL 1h)
 - **Endpoint admin de cache** — `DELETE /api/admin/cache/workflows/{flowId}` no orquestrador
 - ~~**Authentik no docker-compose**~~ — ✅ Feito: blueprint auto-aplica providers SPA + M2M; BFF aceita tokens de múltiplos issuers; testes integrados chegaram a 96% (32/33)
+- ~~**Versionamento semântico no update de workflow**~~ — ✅ Feito: Manager calcula e persiste nova versão automaticamente no `PUT`
+
+---
+
+## Sessão mais recente — CONCLUÍDA ✅
+
+> Implementação de versionamento semântico automático ao atualizar workflows no Manager
+
+### O que foi feito
+
+1. **`VersioningService`** (novo) — `service-portal-manager/src/main/kotlin/.../service/VersioningService.kt`
+   - `detectChangeType(oldYaml, newYaml)`: compara seções `contract`, `integrations`, `description` (normalização JSON para comparação agnóstica a formatação)
+   - `calculateNextVersion(currentVersion, changeType)`: SemVer 2.0.0 — MAJOR resets minor+patch, MINOR resets patch, PATCH incrementa apenas patch
+   - `updateVersionInYaml(yamlContent, newVersion)`: sobrescreve o campo `flow.version` no YAML persistido para manter consistência
+
+2. **`FlowDocumentService.update()` refatorado**
+   - Não atualiza mais o documento in-place
+   - Desativa a versão existente (`active = false`)
+   - Calcula nova versão via `VersioningService`
+   - Valida que a versão calculada não existe ainda (409 se existir)
+   - Cria novo documento com a nova versão e YAML atualizado
+   - Validação alterada: só exige que `flow.id` do YAML bata com o `flowId` do path (versão no YAML é ignorada)
+
+3. **`FlowDocumentRepository`** — adicionado `findAllByActiveTrue(pageable)` para listagem paginada de ativos
+
+4. **`FlowDocumentService.listAll()`** — alterado para usar `findAllByActiveTrue(pageable)` em vez de `findAll(pageable)` — endpoints de listagem só exibem workflows ativos
+
+5. **`FlowController.update()`** — retorna **201 Created** com header `Location: /manager/flows/{flowId}/versions/{newVersion}` (novo recurso criado)
+
+6. **Testes**
+   - `VersioningServiceTest` — 11 casos: detecção MAJOR/MINOR/PATCH, precedência, cálculo de bump, update de YAML
+   - `FlowDocumentServiceTest` — reescrito para novo comportamento: PATCH bump, MAJOR bump, erros de validação, teste de listAll ativo-only
+   - `FlowControllerTest` — update verificado com 201 + Location
+
+### Resultado
+- **71 testes, 0 falhas**, cobertura JaCoCo ≥ 95% INSTRUCTION
+
+### Pendência marcada
+- `GET /manager/flows/{flowId}/versions?status=inactive` — endpoint de histórico para listar versões desativadas (auditoria/rollback)
