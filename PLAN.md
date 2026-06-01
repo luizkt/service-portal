@@ -102,7 +102,8 @@ Manager (Kotlin, :8082) — dono da collection `workflows` (após migração fas
 | **Corrigir testes integrados** | Raiz + BFF | ✅ Feito | Script v3 criado; 32/33 (96%) passando, 0 falhas; 1 skipped = aviso jq ausente |
 | **Authentik automático no docker-compose** | Raiz + BFF | ✅ Feito | Blueprint `/authentik/blueprints/service-portal.yml`; bootstrap vars; BFF multi-issuer JWT; global token endpoint; script v3 integrado com `.env` sourcing |
 | **Grupos de acesso + autorização por grupo** | Authentik + BFF | ✅ Feito | Blueprint: grupos ADMIN/RULES/WORKFLOWS + usuários it/bizop/workop; scope mapping `groups` claim no JWT; `@EnableMethodSecurity` + `JwtAuthenticationConverter`; `@PreAuthorize` em FlowProxyController; 40 testes passando |
-| **Tela de login com formulário + acesso por grupo** | Frontend | ✅ Feito | ROPC grant via `loginWithPassword`; `decodeJwtPayload` extrai groups do JWT; sidebar com nome+badge por grupo; welcome screen com perfil de acesso; 69 testes, 100% coverage |
+| **Tela de login com formulário + acesso por grupo** | Frontend + BFF | ✅ Feito | BFF-proxied login via Authentik Flow Executor (HTTP/1.1, PRG + PKCE); `loginWithPassword` chama `/bff/auth/login`; `decodeJwtPayload` extrai groups do JWT; sidebar com nome+badge por grupo; welcome screen com perfil de acesso; 69 testes frontend + 3 testes BFF |
+| **Filtragem de menu por grupo (sidebar)** | BFF | ✅ Feito | BFF filtra `GET /bff/menu` pelo grupo do usuário autenticado; `MenuItemDto` ganha `requiredGroups` (`@JsonIgnore`); `flow-manager` exige ADMIN ou WORKFLOWS; RULES e sem-grupo recebem lista vazia; 6 novos testes, 49 total, BUILD SUCCESSFUL |
 | **Versionamento semântico automático no update de workflow** | Manager | ✅ Feito | `PUT /manager/flows/{flowId}/versions/{v}` mantém versão antiga ativa e cria nova via SemVer 2.0.0 (MAJOR=contract, MINOR=integrations, PATCH=description); `GET /manager/flows` lista somente ativos; 71 testes, cobertura ≥ 95% |
 | **Endpoint de histórico de versões** | Manager | ✅ Feito | `GET /manager/flows/{flowId}/versions?status=active\|inactive` lista todas as versões (ou filtra); 76 testes, cobertura ≥ 95% |
 
@@ -223,6 +224,16 @@ Manager (Kotlin, :8082) — dono da collection `workflows` (após migração fas
   - `FlowProxyController` anotado com `@PreAuthorize("hasAnyAuthority('ADMIN', 'WORKFLOWS')")` — acesso a todos os endpoints de flows/executions exige grupo ADMIN ou WORKFLOWS
   - Scope `groups` adicionado a `bff.auth.scopes` (`application.yml` + `application-docker.yml`) → frontend o solicita no fluxo PKCE → Authentik inclui `groups` no JWT
   - 4 novos testes em `SecurityConfigIT`: WORKFLOWS→200, ADMIN→200, RULES→403, sem grupos→403; 40 testes total, 0 falhas, cobertura mantida ≥ 95%
+
+### ✅ Feito — Filtragem de menu por grupo (sidebar)
+
+**Bug corrigido:** `GET /bff/menu` agora filtra itens pelo grupo do JWT antes de retornar.
+
+- **`MenuItemDto`**: campo `List<String> requiredGroups` com `@JsonIgnore` e `@Singular` (Lombok builder) — não trafega para o frontend
+- **`BffMenuController`**: `@AuthenticationPrincipal Jwt jwt` injeta o token; `jwt.getClaimAsStringList("groups")` extrai os grupos; catálogo `ALL_ITEMS` estático com `requiredGroups` declarados por item; `flow-manager` exige `ADMIN` ou `WORKFLOWS`
+- **6 testes novos** em `BffMenuControllerTest`: ADMIN→[flow-manager], WORKFLOWS→[flow-manager], RULES→[], sem-grupo→[], sem claim groups→[], @JsonIgnore verificado via reflexão
+- **49 testes total, 0 falhas, BUILD SUCCESSFUL**
+- Frontend: sem alteração — `Sidebar.tsx` já exibe "Nenhuma funcionalidade disponível" para lista vazia
 
 ### ⬜ Pendente
 
