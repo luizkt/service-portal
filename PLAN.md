@@ -565,8 +565,8 @@ Autorização por endpoint conforme tabela de acesso de cada collection (seção
 
 | Sessão | # | Pendência | Esforço |
 |---|---|---|---|
-| **S1** | 3 | Corrigir comentário em `ValidationController.kt` | ⚡ Trivial |
-| **S1** | 1 | Exibir `validations` no resultado de execução (frontend) | ⚡ Pequeno |
+| ~~**S1**~~ | ~~3~~ | ~~Corrigir comentário em `ValidationController.kt`~~ ✅ | ⚡ Trivial |
+| ~~**S1**~~ | ~~1~~ | ~~Exibir `validations` no resultado de execução (frontend)~~ ✅ | ⚡ Pequeno |
 | **S2** | 2 | Mover `mongodb-workflows/` para o Manager + renomear database | 🟡 Médio |
 | **S2** | 5 | Dados de exemplo no `init-mongo.js` *(depende do #2)* | 🟡 Médio |
 | **S3** | 6 | Invalidação de cache cross-service (endpoint admin no orquestrador) | 🟠 Médio+ |
@@ -576,13 +576,17 @@ Autorização por endpoint conforme tabela de acesso de cada collection (seção
 
 ## Pendências registradas
 
-### ⬜ Melhoria: resultado de execução com `validations` no frontend
+### ✅ Melhoria: resultado de execução com `validations` no frontend
 
 > 📄 **Plano detalhado:** [docs/plans/PLAN-validations-frontend.md](docs/plans/PLAN-validations-frontend.md)
 
-O campo `validations` já trafega no JSON do orquestrador → BFF → frontend (passthrough `Map<String,Object>`), mas o `FlowManager.tsx` exibe apenas `execResult.result`. Deve mostrar também o mapa `validations` de forma visual, lado a lado ou como seção separada.
+Concluído (S1). O `FlowManager.tsx` agora exibe o mapa `validations` em seção própria ("Validações", com borda âmbar) abaixo das "Integrações", tanto na view v1 quanto v2. A seção só aparece quando `validations` está presente e não vazio.
 
-**Escopo:** `service-portal-frontend` (`FlowManager.tsx`, possivelmente `.css`) + `service-portal-bff` se precisar de ajuste no DTO de resposta.
+- `src/types/index.ts` — `OrchestrationResponse` ganhou `validations?: Record<string, unknown>`
+- `FlowManager.tsx` — renderização condicional de `execResult.validations` e `execResultV2.validations` com títulos de seção
+- `FlowManager.css` — estilos `.fm-exec-section-title` e `.fm-exec-validations` (borda âmbar)
+- `bff.test.ts` — novo teste de passthrough do campo `validations`; 71 testes frontend, 0 falhas; `tsc --noEmit` limpo
+- BFF não precisou de ajuste (passthrough `Map<String,Object>` já transparente)
 
 ---
 
@@ -603,9 +607,11 @@ O `generic-orchestrator` não acessa mais o MongoDB diretamente — todo acesso 
 
 ---
 
-### ⬜ Fix: revalidar regras de acesso no Manager para `validations`
+### ✅ Fix: revalidar regras de acesso no Manager para `validations`
 
 > 📄 **Plano detalhado:** [docs/plans/PLAN-fix-validations-access-rules.md](docs/plans/PLAN-fix-validations-access-rules.md)
+
+Concluído (S1). Comentário em `ValidationController.kt` corrigido: RULES (bizop) → **CRUD completo** (era "leitura apenas"). Apenas documentação inline; nenhuma lógica/anotação/teste alterado. Os 3 controllers (`Integration`, `Contract`, `Validation`) conferidos lado a lado — consistentes com a tabela. Build do Manager `BUILD SUCCESSFUL`.
 
 A regra de acesso para `validations` foi corrigida — RULES (bizop) tem **CRUD completo**, não somente leitura:
 
