@@ -466,13 +466,13 @@ Exemplo de documento:
 
 #### `validations`
 
-Validações pós-integrações (mesmo formato de `integrations`). Gerenciada pelo time de TI, consultada pelo bizop.
+Validações pós-integrações (mesmo formato de `integrations`). Gerenciada pelo time de TI e pelo bizop.
 
 | Grupo (Authentik) | Acesso |
 |---|---|
 | ADMIN (it) | CRUD completo |
+| RULES (bizop) | CRUD completo |
 | WORKFLOWS (workop) | Nenhum acesso |
-| RULES (bizop) | Leitura apenas |
 
 Formato: idêntico ao `integrations` (campos `validationId`, `version`, `type`, `url`, `method`, `headers`, `timeout`, `bodyTemplate`, `responseBody`).
 
@@ -556,7 +556,106 @@ Autorização por endpoint conforme tabela de acesso de cada collection (seção
 
 ## Pontos em aberto (infra / outros)
 
-- **Invalidação de cache cross-service**: orquestrador invalida workflows apenas pelo TTL de 1h. Para produção, considerar Redis Pub/Sub ou endpoint admin de invalidação no orquestrador chamado pelo Manager nos updates
+- **Invalidação de cache cross-service**: orquestrador invalida workflows apenas pelo TTL de 1h. Para produção, considerar Redis Pub/Sub ou endpoint admin de invalidação no orquestrador chamado pelo Manager nos updates.
+  > 📄 **Plano detalhado:** [docs/plans/PLAN-cache-invalidation.md](docs/plans/PLAN-cache-invalidation.md)
+
+---
+
+## Pendências registradas
+
+### ⬜ Melhoria: resultado de execução com `validations` no frontend
+
+> 📄 **Plano detalhado:** [docs/plans/PLAN-validations-frontend.md](docs/plans/PLAN-validations-frontend.md)
+
+O campo `validations` já trafega no JSON do orquestrador → BFF → frontend (passthrough `Map<String,Object>`), mas o `FlowManager.tsx` exibe apenas `execResult.result`. Deve mostrar também o mapa `validations` de forma visual, lado a lado ou como seção separada.
+
+**Escopo:** `service-portal-frontend` (`FlowManager.tsx`, possivelmente `.css`) + `service-portal-bff` se precisar de ajuste no DTO de resposta.
+
+---
+
+### ⬜ Fix: mover `mongodb-workflows/` do orquestrador para o Manager
+
+> 📄 **Plano detalhado:** [docs/plans/PLAN-move-mongodb-workflows.md](docs/plans/PLAN-move-mongodb-workflows.md)
+
+O `generic-orchestrator` não acessa mais o MongoDB diretamente — todo acesso à collection `workflows` é feito via API do `service-portal-manager`. A pasta `mongodb-workflows/` (com `init-mongo.js`) deve ser movida para dentro de `service-portal-manager/`.
+
+**Itens:**
+- Mover `generic-orchestrator/mongodb-workflows/` → `service-portal-manager/mongodb-manager/`
+- Renomear o database de `generic-orchestrator` para `service-portal-manager` no `init-mongo.js`
+- Atualizar `docker-compose-service-portal.yml`: volume mount do MongoDB deve apontar para o novo caminho + defaults `MONGODB_DATABASE`
+- Atualizar `service-portal-manager/docker-compose.yml`: volume mount per-app + comentário
+- Atualizar `AGENTS.md` do orquestrador e do manager
+- Atualizar `README.md` do orquestrador (remover menção ao script de init Mongo) e do manager (adicionar)
+- **Nota:** renomear o database requer `docker compose down -v` para destruir volumes antigos
+
+---
+
+### ⬜ Fix: revalidar regras de acesso no Manager para `validations`
+
+> 📄 **Plano detalhado:** [docs/plans/PLAN-fix-validations-access-rules.md](docs/plans/PLAN-fix-validations-access-rules.md)
+
+A regra de acesso para `validations` foi corrigida — RULES (bizop) tem **CRUD completo**, não somente leitura:
+
+| Collection | ADMIN (it) | RULES (bizop) | WORKFLOWS (workop) |
+|---|---|---|---|
+| `integrations` | CRUD | sem acesso | somente leitura |
+| `contracts` | CRUD | somente leitura | CRUD |
+| `validations` | CRUD | **CRUD** ← corrigido | sem acesso |
+
+**O que verificar no Manager (`service-portal-manager`):**
+- `ValidationController.kt` — os comentários/anotações de acesso estão corretos? (acesso ao CRUD por ADMIN e RULES; sem acesso para WORKFLOWS)
+- Comparar com `IntegrationController.kt` e `ContractController.kt` para garantir consistência
+- Os comentários inline nas controllers refletem a regra correta (o enforcement real será feito pelo BFF via `@PreAuthorize` em sessão futura, mas a documentação no código precisa estar certa agora)
+
+---
+
+### ⬜ Feature: telas de gerenciamento de contratos, integrações e validações (Frontend + BFF)
+
+> 📄 **Plano detalhado:** [docs/plans/PLAN-management-screens.md](docs/plans/PLAN-management-screens.md)
+
+Criar as novas telas no frontend para gerenciar as collections `contracts`, `integrations` e `validations`, seguindo o mesmo padrão Server Driven UI já existente no `FlowManager`.
+
+**Regras de acesso por perfil (enforcement no BFF via `@PreAuthorize`, espelhando o Manager):**
+
+| Collection | ADMIN (it) | RULES (bizop) | WORKFLOWS (workop) |
+|---|---|---|---|
+| `integrations` | CRUD completo | sem acesso | somente leitura |
+| `contracts` | CRUD completo | somente leitura | CRUD completo |
+| `validations` | CRUD completo | CRUD completo | sem acesso |
+
+**Escopo BFF:**
+- Proxy endpoints `/bff/integrations`, `/bff/contracts`, `/bff/validations` apontando para o Manager
+- `@PreAuthorize` por endpoint conforme tabela acima
+- Atualizar `GET /bff/menu` para incluir os novos itens de menu com `requiredGroups` corretos
+
+**Escopo Frontend:**
+- 3 novos componentes de feature: `IntegrationManager`, `ContractManager`, `ValidationManager`
+- Registrar em `ComponentRenderer` e no catálogo de menu do BFF
+- Formulários de criação/edição respeitando os campos de cada collection (ver documentação das APIs no Manager)
+- Listagem com paginação, filtro por `status=active`, e visualização de versões (`GET /{id}/versions`)
+- Ações de update criam nova versão (exibir `version` atual e `Location` da nova)
+- Botão de desativar (DELETE → soft delete)
+
+**Referência de APIs já existentes no Manager:**
+- `POST/GET /manager/integrations`, `GET /manager/integrations/{id}/versions`, `GET/PUT/DELETE /manager/integrations/{id}/versions/{v}`
+- Idem para `/manager/contracts` e `/manager/validations`
+
+---
+
+### ⬜ Melhoria: dados de exemplo no `init-mongo.js`
+
+> 📄 **Plano detalhado:** [docs/plans/PLAN-init-mongo-example-data.md](docs/plans/PLAN-init-mongo-example-data.md)
+> ⚠️ **Depende da pendência #2** (mover `mongodb-workflows/` para o Manager)
+
+Ao inicializar o MongoDB, criar documentos de exemplo em todas as collections para facilitar desenvolvimento e testes locais.
+
+**Collections a popular:**
+- `workflows` — workflow de exemplo `create-order-v1` (reaproveitando o YAML de `docs/example-flow.yml`)
+- `integrations` — integração `validate-client` apontando para WireMock
+- `contracts` — contrato `create-order` com campos `clientId` (STRING, obrigatório) e `amount` (DECIMAL, obrigatório)
+- `validations` — validação `check-credit-limit` apontando para WireMock
+
+**Referência:** usar os dados já definidos no `example-flow.yml` do orquestrador como fonte de verdade para os exemplos.
 
 ---
 
