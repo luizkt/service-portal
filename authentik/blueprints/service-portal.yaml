@@ -73,6 +73,10 @@ entries:
       invalidation_flow: !Find [authentik_flows.flow, [slug, default-provider-invalidation-flow]]
       client_type: public
       client_id: !Env [AUTHENTIK_CLIENT_ID, service-portal-spa]
+      # signing_key OBRIGATÓRIO: sem ele o Authentik assina os JWT com HS256
+      # (simétrico) e o endpoint JWKS fica vazio → o BFF (Resource Server,
+      # valida via JWKS/RS256) rejeita o token com "Another algorithm expected".
+      signing_key: !Find [authentik_crypto.certificatekeypair, [name, authentik Self-signed Certificate]]
       redirect_uris:
         - url: "http://localhost:5173/auth/callback"
           matching_mode: strict
@@ -112,6 +116,8 @@ entries:
       client_type: confidential
       client_id: service-portal-m2m
       client_secret: !Env [AUTHENTIK_M2M_SECRET, service-portal-m2m-secret]
+      # signing_key OBRIGATÓRIO (RS256 + JWKS) — ver nota no provider SPA.
+      signing_key: !Find [authentik_crypto.certificatekeypair, [name, authentik Self-signed Certificate]]
       redirect_uris: []
       sub_mode: hashed_user_id
       include_claims_in_id_token: true
@@ -211,3 +217,52 @@ entries:
       password: workoppass
       groups:
         - !Find [authentik_core.group, [name, WORKFLOWS]]
+
+  # ─── 14. Flow de login do BFF (service-portal-ropc) ────────────────────────
+  # O BFF (AuthentikLoginService) autentica usuário/senha server-side via
+  # Flow Executor neste slug. Sequência: identification → password → user-login
+  # (SEM MFA — o fluxo programático não resolve desafios de TOTP/WebAuthn).
+  # Reaproveita os 3 stages default do Authentik via bindings abaixo.
+  - model: authentik_flows.flow
+    state: present
+    identifiers:
+      slug: service-portal-ropc
+    attrs:
+      name: Service Portal ROPC
+      title: Service Portal Login
+      slug: service-portal-ropc
+      designation: authentication
+      authentication: require_unauthenticated
+
+  # ─── 15. Binding: identification stage (order 10) ──────────────────────────
+  - model: authentik_flows.flowstagebinding
+    state: present
+    identifiers:
+      target: !Find [authentik_flows.flow, [slug, service-portal-ropc]]
+      stage: !Find [authentik_stages_identification.identificationstage, [name, default-authentication-identification]]
+      order: 10
+    attrs:
+      evaluate_on_plan: true
+      re_evaluate_policies: false
+
+  # ─── 16. Binding: password stage (order 20) ────────────────────────────────
+  - model: authentik_flows.flowstagebinding
+    state: present
+    identifiers:
+      target: !Find [authentik_flows.flow, [slug, service-portal-ropc]]
+      stage: !Find [authentik_stages_password.passwordstage, [name, default-authentication-password]]
+      order: 20
+    attrs:
+      evaluate_on_plan: true
+      re_evaluate_policies: false
+
+  # ─── 17. Binding: user-login stage (order 30 — sem MFA) ────────────────────
+  - model: authentik_flows.flowstagebinding
+    state: present
+    identifiers:
+      target: !Find [authentik_flows.flow, [slug, service-portal-ropc]]
+      stage: !Find [authentik_stages_user_login.userloginstage, [name, default-authentication-login]]
+      order: 30
+    attrs:
+      evaluate_on_plan: true
+      re_evaluate_policies: false

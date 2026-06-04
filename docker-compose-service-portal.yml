@@ -142,7 +142,9 @@ services:
       AUTHENTIK_BOOTSTRAP_EMAIL:      ${AUTHENTIK_ADMIN_EMAIL:-admin@sp.local}
       AUTHENTIK_BOOTSTRAP_PASSWORD:   ${AUTHENTIK_ADMIN_PASSWORD:-admin}
       AUTHENTIK_BOOTSTRAP_TOKEN:      ${AUTHENTIK_BOOTSTRAP_TOKEN:-sp-bootstrap-token}
-      # Variáveis lidas pelo blueprint service-portal.yml
+      # Variáveis lidas pelo blueprint service-portal.yaml
+      # IMPORTANTE: a descoberta de blueprints do Authentik varre apenas
+      # **/*.yaml (rglob) — arquivos .yml NÃO são descobertos/aplicados.
       AUTHENTIK_CLIENT_ID:            ${AUTHENTIK_CLIENT_ID:-service-portal-spa}
       AUTHENTIK_APP_SLUG:             ${AUTHENTIK_APP_SLUG:-service-portal}
       AUTHENTIK_M2M_SECRET:           ${AUTHENTIK_M2M_SECRET:-service-portal-m2m-secret}
@@ -291,6 +293,11 @@ services:
       JWT_ISSUER:               ${MANAGER_JWT_ISSUER:-service-portal-manager}
       MANAGER_ADMIN_USERNAME:   ${MANAGER_ADMIN_USERNAME:-admin}
       MANAGER_ADMIN_PASSWORD:   ${MANAGER_ADMIN_PASSWORD:-admin}
+      # Invalidação de cache cross-service. Sem depends_on no orchestrator
+      # (ele já depende do manager — evita ciclo; a invalidação é fault-tolerant).
+      ORCHESTRATOR_URL:         http://orchestrator:8080
+      ORCHESTRATOR_ADMIN_USERNAME: ${ORCHESTRATOR_ADMIN_USERNAME:-admin}
+      ORCHESTRATOR_ADMIN_PASSWORD: ${ORCHESTRATOR_ADMIN_PASSWORD:-admin}
     ports:
       - "${MANAGER_PORT:-8082}:${MANAGER_INTERNAL_PORT:-8082}"
     depends_on:
