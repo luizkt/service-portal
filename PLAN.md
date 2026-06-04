@@ -31,7 +31,7 @@ Branch principal: `claude/projeto-base`
 - Multi-instância de Kafka e RabbitMQ configurada via `orch-integrations` no `application.yml`; match pelo campo `id`
 - Profile Spring `docker` para rodar com `docker compose up`
 - Sem libs de UI/state externas no frontend — `fetch` nativo + `useState/useEffect`
-- `POST /api/orchestrate/{version}/{flowId}` exige `version` no path (BFF já repassa, frontend usa `v1` por padrão)
+- Endpoints de execução versionados: `/api/v1/flows/{flowId}/versions/{version}/executions` (sequencial) e `/api/v2/flows/{flowId}/versions/{version}/executions` (paralelo via Virtual Threads)
 - MongoDB: database `generic-orchestrator`, collection `workflows`, índice composto em `id` + `versao`
 
 ---
@@ -106,6 +106,10 @@ Manager (Kotlin, :8082) — dono da collection `workflows` (após migração fas
 | **Filtragem de menu por grupo (sidebar)** | BFF | ✅ Feito | BFF filtra `GET /bff/menu` pelo grupo do usuário autenticado; `MenuItemDto` ganha `requiredGroups` (`@JsonIgnore`); `flow-manager` exige ADMIN ou WORKFLOWS; RULES e sem-grupo recebem lista vazia; 6 novos testes, 49 total, BUILD SUCCESSFUL |
 | **Versionamento semântico automático no update de workflow** | Manager | ✅ Feito | `PUT /manager/flows/{flowId}/versions/{v}` mantém versão antiga ativa e cria nova via SemVer 2.0.0 (MAJOR=contract, MINOR=integrations, PATCH=description); `GET /manager/flows` lista somente ativos; 71 testes, cobertura ≥ 95% |
 | **Endpoint de histórico de versões** | Manager | ✅ Feito | `GET /manager/flows/{flowId}/versions?status=active\|inactive` lista todas as versões (ou filtra); 76 testes, cobertura ≥ 95% |
+| **Execução multithread com Java Virtual Threads (v2 endpoint)** | Orquestrador | ✅ Feito | Endpoint v1 (`/api/v1/flows/...`) preserva comportamento sequencial; endpoint v2 (`/api/v2/flows/...`) paralela integrações com mesmo `order` via `Executors.newVirtualThreadPerTaskExecutor()`; `FlowExecutionContext.integrations` migrado para `ConcurrentHashMap`; `OrchestrationV2Service` + 6 testes; 78 testes total, BUILD SUCCESSFUL |
+| **Propagação v2 para BFF e Frontend (comparativo de performance)** | BFF + Frontend | ✅ Feito | BFF: `OrchestratorClient.executeV2()` + endpoint `POST /bff/flows/.../executions/v2`; Frontend: botões "v1 Sequencial" e "v2 Paralelo" com resultados lado a lado; 51 testes BFF + 70 testes frontend, todos passando |
+| **Modularização de workflows: collections integrations, contracts, validations** | Manager | ✅ Feito | 3 novas collections MongoDB; CRUD APIs `/manager/integrations`, `/manager/contracts`, `/manager/validations`; `ResourceRef` + campos `contract/integrationRefs/validationRefs` no `FlowDocument`; `SequentialVersioningService` (1→2→3); `init-mongo.js` atualizado; 150 testes, 0 falhas |
+| **Execução da seção `validations` no pipeline do orquestrador** | Orquestrador | ✅ Feito | Fase validações após integrações em v1 e v2; reutiliza `IntegrationDefinition`; `FlowExecutionContext.validations` separado de `integrations`; `executePhase()` + `runStep(BiConsumer)` no v2; resposta inclui `result` (integrações) e `validations` (validações) como mapas separados; 87 testes, 0 falhas, gate JaCoCo ≥ 95% |
 
 ---
 
@@ -188,6 +192,19 @@ Manager (Kotlin, :8082) — dono da collection `workflows` (após migração fas
 ### ⬜ Pendente
 
 (nenhum item pendente neste componente)
+
+### ✅ Consumidores do endpoint v2 — implementados
+
+**BFF (`service-portal-bff`)**
+- `OrchestratorClient`: path corrigido para `/api/v1/flows/...`; método `executeV2()` adicionado apontando para `/api/v2/flows/...`
+- `FlowProxyController`: novo endpoint `POST /bff/flows/{flowId}/versions/{version}/executions/v2` delegando para `executeV2()`
+- Testes: `OrchestratorClientTest` atualizado (v1 path) + novo caso v2; `FlowProxyControllerTest` com caso `executeFlowV2`; 51 testes BFF, 0 falhas
+
+**Frontend (`service-portal-frontend`)**
+- `bff.ts`: função `executeV2()` adicionada chamando `/bff/flows/.../executions/v2`
+- `FlowManager.tsx`: botões "v1 Sequencial" e "v2 Paralelo" na view de execução; resultados exibidos lado a lado em grid 2 colunas para comparativo visual
+- `.css`: estilos `btn-secondary`, `fm-exec-actions`, `fm-exec-compare`, `fm-exec-status` adicionados
+- Testes: `bff.test.ts` com caso `executeV2`; 70 testes frontend, 0 falhas
 
 ### ❌ Descartado
 - (nada descartado até o momento)
@@ -366,11 +383,179 @@ Para evitar trafegar dezenas/centenas de KB por fluxo em listagens (cliente norm
 
 ---
 
+## Sessão mais recente — CONCLUÍDA ✅
+
+> Modularização da configuração de workflows: collections `integrations`, `contracts` e `validations` no Manager + referências na collection `workflows`.
+
+### Contexto
+
+Hoje o workflow carrega toda a configuração inline no `yamlContent`. A ideia é separar as partes reutilizáveis em collections dedicadas para que cada time possa gerenciar seu escopo de forma independente, com versionamento sequencial próprio.
+
+**Regra fundamental**: a collection `workflows` existente **não muda de estrutura** no YAML — apenas ganha 3 novos campos de referência. O `yamlContent` segue sendo gerado/composto pelo Manager a partir dessas referências.
+
+---
+
+### 1. Novas collections no MongoDB
+
+#### `integrations`
+
+Configuração de integrações HTTP (contrato + exemplo). Gerenciada pelo time de TI.
+
+| Grupo (Authentik) | Acesso |
+|---|---|
+| ADMIN (it) | CRUD completo |
+| RULES (bizop) | Nenhum acesso |
+| WORKFLOWS (workop) | Leitura apenas |
+
+Exemplo de documento:
+```json
+{
+    "integrationId": "validate-client",
+    "version": 1,
+    "type": "HTTP",
+    "url": "http://api.exemplo.com/clients/{{contract.clientId}}",
+    "method": "GET",
+    "headers": { "Content-Type": "application/json" },
+    "timeout": 5000,
+    "bodyTemplate": null,
+    "responseBody": {
+      "clientId": "{{request.pathSegments.[1]}}",
+      "name": "WireMock Simulated Client",
+      "document": "12345678910",
+      "documentType": "CPF",
+      "active": true,
+      "createdAt": "2026-05-09T10:00:00Z"
+    }
+}
+```
+
+#### `contracts`
+
+Contratos de entrada dos workflows (campos + validações). Gerenciado pelo time de TI e workop.
+
+| Grupo (Authentik) | Acesso |
+|---|---|
+| ADMIN (it) | CRUD completo |
+| RULES (bizop) | Leitura apenas |
+| WORKFLOWS (workop) | CRUD completo |
+
+Exemplo de documento:
+```json
+{
+    "contractId": "validate-client",
+    "version": 1,
+    "fields": [
+        {
+            "name": "clientId",
+            "type": "STRING",
+            "required": true,
+            "validations": [
+                { "type": "NOT_BLANK" },
+                { "type": "PATTERN", "value": "^[A-Z0-9]{6,20}$", "message": "Invalid clientId" }
+            ]
+        },
+        {
+            "name": "amount",
+            "type": "DECIMAL",
+            "required": true,
+            "validations": [{ "type": "POSITIVE" }]
+        }
+    ]
+}
+```
+
+#### `validations`
+
+Validações pós-integrações (mesmo formato de `integrations`). Gerenciada pelo time de TI, consultada pelo bizop.
+
+| Grupo (Authentik) | Acesso |
+|---|---|
+| ADMIN (it) | CRUD completo |
+| WORKFLOWS (workop) | Nenhum acesso |
+| RULES (bizop) | Leitura apenas |
+
+Formato: idêntico ao `integrations` (campos `validationId`, `version`, `type`, `url`, `method`, `headers`, `timeout`, `bodyTemplate`, `responseBody`).
+
+---
+
+### 2. Novos campos na collection `workflows`
+
+Adicionar 3 campos no `FlowDocument` (referências de recursos versionados):
+
+```json
+{
+  "contract": { "id": "validate-client", "version": 1 },
+  "integrationRefs": [
+    { "id": "validate-client", "version": 1 }
+  ],
+  "validationRefs": [
+    { "id": "check-credit-limit", "version": 1 }
+  ]
+}
+```
+
+> Os campos são arrays/objetos de referência — o Manager os usa para compor o `yamlContent`. O `yamlContent` em si não muda de estrutura.
+
+---
+
+### 3. Nova seção `validations` no YAML do workflow
+
+Adicionar suporte ao campo `validations` na raiz do YAML (executado após o término das integrações):
+
+```yaml
+flow:
+  flowId: create-order
+  version: "1.0.0"
+  ...
+  integrations:
+    - ...
+  validations:          # nova seção — executada após todas as integrações
+    - id: check-credit-limit
+      ...
+```
+
+**Pendência para o orquestrador**: implementar a execução da seção `validations` no pipeline de orquestração (após conclusão das integrações). Registrar como item pendente no `generic-orchestrator`.
+
+---
+
+### 4. Regras de versionamento nas novas collections
+
+- Toda alteração em `contracts`, `integrations` ou `validations` cria uma **nova versão sequencial** (1 → 2 → 3, não SemVer)
+- Versão antiga permanece ativa — workflows em produção usando `version: 1` não são afetados
+- Novo campo `active: boolean` em cada documento para suporte a esse padrão
+
+---
+
+### 5. APIs CRUD no Manager
+
+Criar os seguintes conjuntos de endpoints (padrão REST já estabelecido no projeto):
+
+| Recurso | Endpoints |
+|---|---|
+| `integrations` | `POST /manager/integrations`, `GET /manager/integrations`, `GET /manager/integrations/{id}/versions/{v}`, `PUT /manager/integrations/{id}/versions/{v}`, `DELETE /manager/integrations/{id}/versions/{v}` |
+| `contracts` | `POST /manager/contracts`, `GET /manager/contracts`, `GET /manager/contracts/{id}/versions/{v}`, `PUT /manager/contracts/{id}/versions/{v}`, `DELETE /manager/contracts/{id}/versions/{v}` |
+| `validations` | `POST /manager/validations`, `GET /manager/validations`, `GET /manager/validations/{id}/versions/{v}`, `PUT /manager/validations/{id}/versions/{v}`, `DELETE /manager/validations/{id}/versions/{v}` |
+
+Autorização por endpoint conforme tabela de acesso de cada collection (seção 1 acima). Auth via `@PreAuthorize` com grupos Authentik já configurados (`ADMIN`, `RULES`, `WORKFLOWS`).
+
+---
+
+### 6. Checklist da sessão
+
+- [x] `IntegrationDocument.kt` + repository + service + controller
+- [x] `ContractDocument.kt` + repository + service + controller
+- [x] `ValidationDocument.kt` + repository + service + controller
+- [x] `ResourceRef.kt` — data class `{id: String, version: Int}` compartilhada
+- [x] Adicionado `contract: ResourceRef?`, `integrationRefs: List<ResourceRef>`, `validationRefs: List<ResourceRef>` ao `FlowDocument.kt`
+- [x] `SequentialVersioningService.kt` (versionamento 1→2→3, separado do SemVer de workflows)
+- [x] `mongodb-workflows/init-mongo.js` com novas collections e índices únicos `(id, version)`
+- [x] 150 testes, 0 falhas, BUILD SUCCESSFUL
+- [x] **Pendência orquestrador**: executar seção `validations` no pipeline após integrações
+
+---
+
 ## Pontos em aberto (infra / outros)
 
-- **Authentik provider/application**: cadastrar OAuth2/OIDC Provider + Application no Authentik com slug `service-portal` e client public `service-portal-spa` (passos descritos no header do `docker-compose-service-portal.yml`)
-- **Frontend e novo formato de path do BFF**: o BFF agora expõe `/bff/flows/{flowId}/{versao}` (com versão explícita). O `FlowManager` do frontend pode precisar de ajuste para passar versão em PUT/DELETE/GET — tarefa de follow-up se aparecer regressão
-- **Migração de docs antigos**: documentos da collection `workflows` criados pelo orquestrador antes do Manager não têm `yamlContent`. O `getYaml` devolve 404. Backfill não escopado nesta tarefa
 - **Invalidação de cache cross-service**: orquestrador invalida workflows apenas pelo TTL de 1h. Para produção, considerar Redis Pub/Sub ou endpoint admin de invalidação no orquestrador chamado pelo Manager nos updates
 
 ---
