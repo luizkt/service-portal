@@ -558,6 +558,10 @@ Autorização por endpoint conforme tabela de acesso de cada collection (seção
 
 - **Invalidação de cache cross-service**: orquestrador invalida workflows apenas pelo TTL de 1h. Para produção, considerar Redis Pub/Sub ou endpoint admin de invalidação no orquestrador chamado pelo Manager nos updates.
   > 📄 **Plano detalhado:** [docs/plans/PLAN-cache-invalidation.md](docs/plans/PLAN-cache-invalidation.md)
+- ~~**QUEUE `notify-rabbit` no workflow de exemplo**~~ ✅ **Resolvido.** Eram dois problemas: (1) o `id` do passo QUEUE deve casar com o `id` do broker em `orch-integrations.rabbitmqs` (o código usa `def.getId()` como chave do broker — confirmado por `QueueIntegrationIT`), e `notify-rabbit` ≠ `rabbitmq-notifier` → integração falhava; (2) o exchange/fila não existiam → mensagem era silenciosamente descartada. Correções:
+  - Seed (`init-mongo.js`) e `generic-orchestrator/docs/example-flow.yml`: passo QUEUE renomeado para `rabbitmq-notifier` (e o passo Kafka para `kafka-user-tracking`) — alinhado aos ids dos brokers
+  - Nova topologia RabbitMQ via `load_definitions`: `rabbitmq/definitions.json` (usuário `guest` com `password_hash` SHA-256, vhost, exchange topic `orders.exchange`, fila `orders.created.queue`, binding `order.created`) + `rabbitmq/rabbitmq.conf`; montados no container; removidas `RABBITMQ_DEFAULT_USER/PASS` (ignoradas com `load_definitions`)
+  - **Validação e2e**: execução `create-order-v1` → `SUCCESS`; mensagem `{"event":"ORDER_CREATED","orderId":"ord-..."}` entregue em `orders.created.queue` (depth=1); orquestrador `YamlParserServiceTest` reexecutado OK
 
 ---
 
@@ -567,8 +571,8 @@ Autorização por endpoint conforme tabela de acesso de cada collection (seção
 |---|---|---|---|
 | ~~**S1**~~ | ~~3~~ | ~~Corrigir comentário em `ValidationController.kt`~~ ✅ | ⚡ Trivial |
 | ~~**S1**~~ | ~~1~~ | ~~Exibir `validations` no resultado de execução (frontend)~~ ✅ | ⚡ Pequeno |
-| **S2** | 2 | Mover `mongodb-workflows/` para o Manager + renomear database | 🟡 Médio |
-| **S2** | 5 | Dados de exemplo no `init-mongo.js` *(depende do #2)* | 🟡 Médio |
+| ~~**S2**~~ | ~~2~~ | ~~Mover `mongodb-workflows/` para o Manager + renomear database~~ ✅ | 🟡 Médio |
+| ~~**S2**~~ | ~~5~~ | ~~Dados de exemplo no `init-mongo.js` *(depende do #2)*~~ ✅ | 🟡 Médio |
 | **S3** | 6 | Invalidação de cache cross-service (endpoint admin no orquestrador) | 🟠 Médio+ |
 | **S4+** | 4 | Telas de contratos, integrações e validações (BFF + Frontend) | 🔴 Grande |
 
@@ -590,9 +594,31 @@ Concluído (S1). O `FlowManager.tsx` agora exibe o mapa `validations` em seção
 
 ---
 
-### ⬜ Fix: mover `mongodb-workflows/` do orquestrador para o Manager
+### ✅ Fix: mover `mongodb-workflows/` do orquestrador para o Manager
 
 > 📄 **Plano detalhado:** [docs/plans/PLAN-move-mongodb-workflows.md](docs/plans/PLAN-move-mongodb-workflows.md)
+
+Concluído (S2). Script movido de `generic-orchestrator/mongodb-workflows/` → `service-portal-manager/mongodb-manager/init-mongo.js`; database renomeado de `generic-orchestrator` → `service-portal-manager`.
+
+- `service-portal-manager/mongodb-manager/init-mongo.js` criado (novo DB + collections/índices + dados de exemplo da pendência #5)
+- `generic-orchestrator/mongodb-workflows/` removido
+- `docker-compose-service-portal.yml`: volume mount + `MONGO_INITDB_DATABASE` + `MONGODB_URI`/`MONGODB_DATABASE` do manager → `service-portal-manager`
+- `service-portal-manager/docker-compose.yml`: volume mount per-app + comentário atualizados
+- `application.yml`/`application-docker.yml` do Manager: defaults de fallback alinhados (para `bootRun` sem env var conectar ao DB certo)
+- **`.env` + `env.example`**: `MONGODB_DATABASE` alterado para `service-portal-manager` (lacuna do plano — o `.env` sobrescrevia o default do compose e o app conectava ao DB antigo/vazio)
+- Docs: `AGENTS.md` (Manager: nova seção "Inicialização do MongoDB"; defaults), `README.md` (Manager + raiz)
+- Testes do Manager: **BUILD SUCCESSFUL** (sem regressão); `node --check` no init-mongo.js OK
+
+**Validação end-to-end (`down -v && up --build`):**
+- Mongo inicializou `service-portal-manager` com `[workflows, integrations, contracts, validations]`; DB antigo `generic-orchestrator` não existe mais
+- Contagem: workflows=1, integrations=2, contracts=1, validations=1
+- `GET /manager/flows|contracts|integrations|validations` retornam os dados de exemplo (HTTP 200)
+- Execução `create-order-v1` (v1 e v2) → `PARTIAL_SUCCESS`: HTTP `validate-client`+`save-order` OK, validação `check-credit-limit` OK no mapa `validations` (separado de `result`); apenas `notify-rabbit` (QUEUE) falha com `continueOnError: true` (exchange RabbitMQ não declarado — pré-existente, não bloqueante)
+
+**Correções de infra pré-existentes descobertas durante a validação (não causadas pela S2):**
+- **`ResourceRef.id` → `_id`**: Spring Data mapeia propriedade `id` para `_id`; o seed precisou usar `_id` nos refs aninhados (`contract`/`integrationRefs`/`validationRefs`), senão a desserialização do `FlowDocument` quebrava
+- **WireMock na porta 80**: o alias `api.exemplo.com` resolvia o container mas as URLs dos workflows (sem porta) batiam na 80 enquanto o WireMock escutava na 8080 → `--port 80` no compose (host segue em 18080); afeta também o `example-flow.yml` canônico
+- **`wiremock/mappings/orders-post.json`**: template `now` com escapes inválidos gerava JSON quebrado (HTTP 500) → simplificado para `{{now format='yyyy-MM-dd'}}T{{now format='HH:mm:ss'}}Z`
 
 O `generic-orchestrator` não acessa mais o MongoDB diretamente — todo acesso à collection `workflows` é feito via API do `service-portal-manager`. A pasta `mongodb-workflows/` (com `init-mongo.js`) deve ser movida para dentro de `service-portal-manager/`.
 
@@ -661,10 +687,18 @@ Criar as novas telas no frontend para gerenciar as collections `contracts`, `int
 
 ---
 
-### ⬜ Melhoria: dados de exemplo no `init-mongo.js`
+### ✅ Melhoria: dados de exemplo no `init-mongo.js`
 
 > 📄 **Plano detalhado:** [docs/plans/PLAN-init-mongo-example-data.md](docs/plans/PLAN-init-mongo-example-data.md)
 > ⚠️ **Depende da pendência #2** (mover `mongodb-workflows/` para o Manager)
+
+Concluído (S2, junto com #2). O `mongodb-manager/init-mongo.js` agora popula as 4 collections com dados coerentes entre si:
+- `contracts`: `create-order` (campos `clientId` + `amount` com validações)
+- `integrations`: `validate-client` (GET) e `save-order` (POST)
+- `validations`: `check-credit-limit` (GET `/clients/{id}/credit`)
+- `workflows`: `create-order-v1` com `yamlContent` completo + refs (`contract`, `integrationRefs`, `validationRefs`) — refs usam `_id` (ver nota de mapeamento Spring Data no bloco #2)
+- Campo `_class` em cada doc para desserialização do Spring Data
+- WireMock: novo mapping `wiremock/mappings/clients-credit-get.json` para o endpoint de crédito (validado: HTTP 200 e usado com sucesso na execução do workflow)
 
 Ao inicializar o MongoDB, criar documentos de exemplo em todas as collections para facilitar desenvolvimento e testes locais.
 

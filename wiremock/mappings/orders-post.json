@@ -13,7 +13,7 @@
     "jsonBody": {
       "id": "ord-{{randomValue type='ALPHANUMERIC' length=8 uppercase=true}}",
       "status": "CREATED",
-      "createdAt": "{{now format='yyyy-MM-dd\\'T\\'HH:mm:ss\\'Z\\''}}"
+      "createdAt": "{{now format='yyyy-MM-dd'}}T{{now format='HH:mm:ss'}}Z"
     },
     "transformers": ["response-template"]
   }

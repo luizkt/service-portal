@@ -163,12 +163,12 @@ service-portal/
 ├── env.example                          ← copie para .env
 ├── generic-orchestrator/                ← executor de workflows
 │   ├── docker-compose.yml              ← compose isolado
-│   ├── docs/example-flow.yml           ← workflow de exemplo
-│   └── mongodb-workflows/init-mongo.js ← init script Mongo
+│   └── docs/example-flow.yml           ← workflow de exemplo
 ├── service-portal-bff/                  ← BFF
 │   └── docker-compose.yml              ← compose isolado
 ├── service-portal-manager/              ← CRUD de workflows
-│   └── docker-compose.yml              ← compose isolado
+│   ├── docker-compose.yml              ← compose isolado
+│   └── mongodb-manager/init-mongo.js   ← init script Mongo (DB service-portal-manager + dados de exemplo)
 ├── service-portal-frontend/             ← SPA React
 │   └── docker-compose.yml              ← compose isolado
 └── wiremock/                            ← mappings das APIs simuladas

@@ -176,12 +176,12 @@ services:
       timeout: 5s
       retries: 5
     environment:
-      MONGO_INITDB_DATABASE: ${MONGODB_DATABASE:-generic-orchestrator}
+      MONGO_INITDB_DATABASE: ${MONGODB_DATABASE:-service-portal-manager}
     ports:
       - "27017:27017"
     volumes:
       - mongo_data:/data/db
-      - ./generic-orchestrator/mongodb-workflows:/docker-entrypoint-initdb.d:ro
+      - ./service-portal-manager/mongodb-manager:/docker-entrypoint-initdb.d:ro
     networks:
       - portal
 
@@ -200,11 +200,13 @@ services:
       interval: 15s
       timeout: 5s
       retries: 5
-    environment:
-      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USERNAME:-guest}
-      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:-guest}
+    # Usuário/permissões e a topologia (exchange orders.exchange + fila + binding)
+    # são carregados de definitions.json via load_definitions (rabbitmq.conf).
+    # RABBITMQ_DEFAULT_USER/PASS são ignorados quando há load_definitions.
     volumes:
       - rabbitmq_data:/var/lib/rabbitmq
+      - ./rabbitmq/rabbitmq.conf:/etc/rabbitmq/rabbitmq.conf:ro
+      - ./rabbitmq/definitions.json:/etc/rabbitmq/definitions.json:ro
     ports:
       - "${RABBITMQ_MANAGEMENT_PORT:-15672}:15672"
     networks:
@@ -282,8 +284,8 @@ services:
     environment:
       SPRING_PROFILES_ACTIVE:   docker
       SERVER_PORT:              ${MANAGER_INTERNAL_PORT:-8082}
-      MONGODB_URI:              mongodb://mongodb:27017/${MONGODB_DATABASE:-generic-orchestrator}
-      MONGODB_DATABASE:         ${MONGODB_DATABASE:-generic-orchestrator}
+      MONGODB_URI:              mongodb://mongodb:27017/${MONGODB_DATABASE:-service-portal-manager}
+      MONGODB_DATABASE:         ${MONGODB_DATABASE:-service-portal-manager}
       JWT_SECRET:               ${MANAGER_JWT_SECRET:-${ORCHESTRATOR_JWT_SECRET:?Defina MANAGER_JWT_SECRET ou ORCHESTRATOR_JWT_SECRET no .env}}
       JWT_EXPIRATION:           ${JWT_EXPIRATION:-3600}
       JWT_ISSUER:               ${MANAGER_JWT_ISSUER:-service-portal-manager}
@@ -356,9 +358,11 @@ services:
     image: wiremock/wiremock:3.9.1
     container_name: portal-wiremock
     restart: unless-stopped
-    command: ["--port", "8080", "--global-response-templating", "--verbose"]
+    # Escuta na porta 80 para que os workflows usem URLs realistas sem porta
+    # (ex.: http://api.exemplo.com/clients/...) resolvidas via alias de rede.
+    command: ["--port", "80", "--global-response-templating", "--verbose"]
     healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://localhost:8080/__admin/health || exit 1"]
+      test: ["CMD-SHELL", "curl -sf http://localhost:80/__admin/health || exit 1"]
       start_period: 10s
       interval: 15s
       timeout: 5s
@@ -367,7 +371,7 @@ services:
       - ./wiremock/mappings:/home/wiremock/mappings:ro
       - ./wiremock/__files:/home/wiremock/__files:ro
     ports:
-      - "${WIREMOCK_PORT:-18080}:8080"
+      - "${WIREMOCK_PORT:-18080}:80"
     networks:
       portal:
         aliases:
