@@ -110,6 +110,7 @@ Manager (Kotlin, :8082) — dono da collection `workflows` (após migração fas
 | **Propagação v2 para BFF e Frontend (comparativo de performance)** | BFF + Frontend | ✅ Feito | BFF: `OrchestratorClient.executeV2()` + endpoint `POST /bff/flows/.../executions/v2`; Frontend: botões "v1 Sequencial" e "v2 Paralelo" com resultados lado a lado; 51 testes BFF + 70 testes frontend, todos passando |
 | **Modularização de workflows: collections integrations, contracts, validations** | Manager | ✅ Feito | 3 novas collections MongoDB; CRUD APIs `/manager/integrations`, `/manager/contracts`, `/manager/validations`; `ResourceRef` + campos `contract/integrationRefs/validationRefs` no `FlowDocument`; `SequentialVersioningService` (1→2→3); `init-mongo.js` atualizado; 150 testes, 0 falhas |
 | **Execução da seção `validations` no pipeline do orquestrador** | Orquestrador | ✅ Feito | Fase validações após integrações em v1 e v2; reutiliza `IntegrationDefinition`; `FlowExecutionContext.validations` separado de `integrations`; `executePhase()` + `runStep(BiConsumer)` no v2; resposta inclui `result` (integrações) e `validations` (validações) como mapas separados; 87 testes, 0 falhas, gate JaCoCo ≥ 95% |
+| **Invalidação de cache cross-service (S3)** | Orquestrador + Manager | ✅ Feito | `CacheAdminController` (`DELETE /api/admin/cache/workflows[/{flowId}/versions/{version}]`) no orquestrador; Manager invalida via `RestClient` (`OrchestratorCacheClient` + `OrchestratorAuthService`) após `update()`/`deactivate()`; falha tolerante (warning, não propaga); validado e2e (chave Redis removida) + tolerância a falha; testes nos dois lados, gates JaCoCo ≥ 95% |
 
 ---
 
@@ -556,7 +557,7 @@ Autorização por endpoint conforme tabela de acesso de cada collection (seção
 
 ## Pontos em aberto (infra / outros)
 
-- **Invalidação de cache cross-service**: orquestrador invalida workflows apenas pelo TTL de 1h. Para produção, considerar Redis Pub/Sub ou endpoint admin de invalidação no orquestrador chamado pelo Manager nos updates.
+- ~~**Invalidação de cache cross-service**~~ ✅ **Resolvido (S3).** Implementada a Opção A (endpoint admin no orquestrador). O Manager invalida o cache Redis do orquestrador após `update()` e `deactivate()`, em vez de esperar o TTL de 1h.
   > 📄 **Plano detalhado:** [docs/plans/PLAN-cache-invalidation.md](docs/plans/PLAN-cache-invalidation.md)
 - ~~**QUEUE `notify-rabbit` no workflow de exemplo**~~ ✅ **Resolvido.** Eram dois problemas: (1) o `id` do passo QUEUE deve casar com o `id` do broker em `orch-integrations.rabbitmqs` (o código usa `def.getId()` como chave do broker — confirmado por `QueueIntegrationIT`), e `notify-rabbit` ≠ `rabbitmq-notifier` → integração falhava; (2) o exchange/fila não existiam → mensagem era silenciosamente descartada. Correções:
   - Seed (`init-mongo.js`) e `generic-orchestrator/docs/example-flow.yml`: passo QUEUE renomeado para `rabbitmq-notifier` (e o passo Kafka para `kafka-user-tracking`) — alinhado aos ids dos brokers
@@ -573,7 +574,7 @@ Autorização por endpoint conforme tabela de acesso de cada collection (seção
 | ~~**S1**~~ | ~~1~~ | ~~Exibir `validations` no resultado de execução (frontend)~~ ✅ | ⚡ Pequeno |
 | ~~**S2**~~ | ~~2~~ | ~~Mover `mongodb-workflows/` para o Manager + renomear database~~ ✅ | 🟡 Médio |
 | ~~**S2**~~ | ~~5~~ | ~~Dados de exemplo no `init-mongo.js` *(depende do #2)*~~ ✅ | 🟡 Médio |
-| **S3** | 6 | Invalidação de cache cross-service (endpoint admin no orquestrador) | 🟠 Médio+ |
+| ~~**S3**~~ | ~~6~~ | ~~Invalidação de cache cross-service (endpoint admin no orquestrador)~~ ✅ | 🟠 Médio+ |
 | **S4+** | 4 | Telas de contratos, integrações e validações (BFF + Frontend) | 🔴 Grande |
 
 ---
