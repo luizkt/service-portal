@@ -561,6 +561,19 @@ Autorização por endpoint conforme tabela de acesso de cada collection (seção
 
 ---
 
+## Ordem de priorização — próximas sessões
+
+| Sessão | # | Pendência | Esforço |
+|---|---|---|---|
+| **S1** | 3 | Corrigir comentário em `ValidationController.kt` | ⚡ Trivial |
+| **S1** | 1 | Exibir `validations` no resultado de execução (frontend) | ⚡ Pequeno |
+| **S2** | 2 | Mover `mongodb-workflows/` para o Manager + renomear database | 🟡 Médio |
+| **S2** | 5 | Dados de exemplo no `init-mongo.js` *(depende do #2)* | 🟡 Médio |
+| **S3** | 6 | Invalidação de cache cross-service (endpoint admin no orquestrador) | 🟠 Médio+ |
+| **S4+** | 4 | Telas de contratos, integrações e validações (BFF + Frontend) | 🔴 Grande |
+
+---
+
 ## Pendências registradas
 
 ### ⬜ Melhoria: resultado de execução com `validations` no frontend
