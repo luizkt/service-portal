@@ -1,0 +1,19 @@
+{
+    "request": {
+        "method": "GET",
+        "urlPathPattern": "/slow/([A-Za-z0-9_-]+)"
+    },
+    "response": {
+        "status": 200,
+        "fixedDelayMilliseconds": 500,
+        "headers": {
+            "Content-Type": "application/json"
+        },
+        "jsonBody": {
+            "id": "{{request.pathSegments.[1]}}",
+            "source": "wiremock-slow-stub",
+            "ok": true
+        },
+        "transformers": ["response-template"]
+    }
+}

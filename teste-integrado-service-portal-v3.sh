@@ -92,8 +92,13 @@ check_prerequisites() {
     command -v curl >/dev/null 2>&1 && success "curl instalado" \
         || { error "curl não instalado"; exit 1; }
 
-    command -v jq >/dev/null 2>&1 && success "jq instalado" \
-        || warning "jq não instalado — alguns testes de parsing podem falhar"
+    if command -v jq >/dev/null 2>&1; then
+        success "jq instalado (paridade v1/v2 detalhada via jq)"
+    elif command -v python3 >/dev/null 2>&1; then
+        info "jq ausente — paridade v1/v2 detalhada usará python3 (fallback)"
+    else
+        warning "jq e python3 ausentes — paridade v1/v2 detalhada será pulada (apenas status)"
+    fi
 }
 
 # ─── Infraestrutura ───────────────────────────────────────────────────────────
@@ -373,6 +378,69 @@ EOF
     else
         warning "Workflow RabbitMQ — HTTP $HTTP_CODE"
     fi
+
+    # Workflow de paralelismo (comparativo v1 x v2): 3 integrações HTTP no MESMO
+    # order (1) apontando para o stub lento do WireMock (/slow, 500ms). Em v1 elas
+    # rodam sequencialmente (~1500ms); em v2, em paralelo via Virtual Threads (~500ms).
+    test_case "Criar workflow paralelo (parallel-demo-v1) — YAML"
+    YAML_PARALLEL=$(cat <<'EOF'
+flow:
+  id: parallel-demo-v1
+  version: "1.0.0"
+  description: "Parallel demo - 3 HTTP integrations at order 1 (slow stub)"
+  active: true
+  contract:
+    fields:
+      - name: refId
+        type: STRING
+        required: true
+        validations:
+          - type: NOT_BLANK
+  integrations:
+    - id: slow-a
+      order: 1
+      type: HTTP
+      continueOnError: false
+      http:
+        url: "http://api.exemplo.com/slow/AAA"
+        method: GET
+        headers:
+          Accept: application/json
+        timeout: 10000
+    - id: slow-b
+      order: 1
+      type: HTTP
+      continueOnError: false
+      http:
+        url: "http://api.exemplo.com/slow/BBB"
+        method: GET
+        headers:
+          Accept: application/json
+        timeout: 10000
+    - id: slow-c
+      order: 1
+      type: HTTP
+      continueOnError: false
+      http:
+        url: "http://api.exemplo.com/slow/CCC"
+        method: GET
+        headers:
+          Accept: application/json
+        timeout: 10000
+EOF
+)
+    RESPONSE=$(curl -s -w "\n%{http_code}" -X POST "$MGR_URL/manager/flows" \
+        -H "Content-Type: text/plain" \
+        -H "Authorization: Bearer $MANAGER_TOKEN" \
+        --data-raw "$YAML_PARALLEL")
+    HTTP_CODE=$(echo "$RESPONSE" | tail -1)
+    if [ "$HTTP_CODE" = "201" ]; then
+        success "Workflow paralelo criado (201)"
+    elif [ "$HTTP_CODE" = "409" ]; then
+        info "Workflow paralelo já existe (409 — ok)"
+    else
+        warning "Workflow paralelo — HTTP $HTTP_CODE"
+    fi
 }
 
 test_crud_workflows() {
@@ -409,47 +477,118 @@ test_crud_workflows() {
 }
 
 # ─── 4. Execução via Orchestrator ────────────────────────────────────────────
+# Globais preenchidos por test_execution para o relatório comparativo v1 x v2.
+PERF_ROWS=()
+EXEC_BODY=""
+EXEC_MS=0
+
+# Executa um workflow no orquestrador na versão indicada (v1|v2) medindo a latência.
+# Resultado em EXEC_BODY (corpo JSON) e EXEC_MS (duração em ms).
+execute_and_measure() {
+    local version=$1 flow_id=$2 payload=$3
+    local start end
+    start=$(date +%s%3N)
+    EXEC_BODY=$(curl -s -X POST \
+        "$ORCH_URL/api/${version}/flows/${flow_id}/versions/1.0.0/executions" \
+        -H "Content-Type: application/json" \
+        -H "Authorization: Bearer $ORCH_TOKEN" \
+        -d "$payload")
+    end=$(date +%s%3N)
+    EXEC_MS=$((end - start))
+}
+
+# Compara paridade semântica de {status,result,validations} entre v1 e v2.
+# Usa jq se disponível; senão python3 (fallback). Retorna:
+#   0 = idêntico, 1 = divergente, 2 = sem ferramenta de comparação disponível.
+compare_parity() {
+    local b1=$1 b2=$2
+    if command -v jq >/dev/null 2>&1; then
+        local p1 p2
+        p1=$(echo "$b1" | jq -S '{status,result,validations}' 2>/dev/null)
+        p2=$(echo "$b2" | jq -S '{status,result,validations}' 2>/dev/null)
+        [ -n "$p1" ] && [ "$p1" = "$p2" ]
+        return
+    fi
+    if command -v python3 >/dev/null 2>&1; then
+        PARITY_B1="$b1" PARITY_B2="$b2" python3 - <<'PY'
+import json, os, sys
+try:
+    a = json.loads(os.environ["PARITY_B1"]); b = json.loads(os.environ["PARITY_B2"])
+except Exception:
+    sys.exit(1)
+key = lambda x: {"status": x.get("status"), "result": x.get("result"), "validations": x.get("validations")}
+sys.exit(0 if key(a) == key(b) else 1)
+PY
+        return
+    fi
+    return 2
+}
+
 test_execution() {
-    section "4. EXECUÇÃO DE WORKFLOWS (Orchestrator direto)"
+    section "4. EXECUÇÃO DE WORKFLOWS — comparativo v1 x v2 (Orchestrator direto)"
 
     if [ -z "$ORCH_TOKEN" ]; then
         warning "Pulando execução — sem token Orchestrator"
         return 1
     fi
 
-    test_case "4.1 POST /api/flows/create-order-v1/versions/1.0.0/executions"
-    RESPONSE=$(curl -s -w "\n%{http_code}" -X POST \
-        "$ORCH_URL/api/flows/create-order-v1/versions/1.0.0/executions" \
-        -H "Content-Type: application/json" \
-        -H "Authorization: Bearer $ORCH_TOKEN" \
-        -d '{"clientId":"CLI001A"}')
-    HTTP_CODE=$(echo "$RESPONSE" | tail -1)
-    BODY=$(echo "$RESPONSE" | head -n -1)
-
-    if echo "$BODY" | grep -q "SUCCESS\|executionId\|result"; then
-        success "Workflow executado (HTTP $HTTP_CODE)"
-        debug "Response: $(echo "$BODY" | head -c 200)"
-    elif [ "$HTTP_CODE" = "200" ]; then
-        success "Execução retornou 200"
-        debug "Response: $(echo "$BODY" | head -c 200)"
+    # 4.1 — create-order-v1 (smoke funcional nas duas rotas). Resposta contém
+    # campos não-determinísticos (orderId aleatório), então validamos paridade
+    # apenas de status, não do result completo.
+    test_case "4.1 create-order-v1 — v1 e v2 retornam SUCCESS"
+    execute_and_measure v1 "create-order-v1" '{"clientId":"ABC123","amount":150.00}'
+    local co_b1=$EXEC_BODY co_t1=$EXEC_MS
+    execute_and_measure v2 "create-order-v1" '{"clientId":"ABC123","amount":150.00}'
+    local co_b2=$EXEC_BODY co_t2=$EXEC_MS
+    if echo "$co_b1" | grep -q '"status":"SUCCESS"' && echo "$co_b2" | grep -q '"status":"SUCCESS"'; then
+        success "create-order-v1: v1=${co_t1}ms, v2=${co_t2}ms (ambos SUCCESS)"
     else
-        warning "Execução — HTTP $HTTP_CODE: $(echo "$BODY" | head -c 150)"
+        warning "create-order-v1: v1=$(echo "$co_b1" | head -c 80) | v2=$(echo "$co_b2" | head -c 80)"
     fi
+    PERF_ROWS+=("| create-order-v1 | ${co_t1}ms | ${co_t2}ms | $(awk "BEGIN{if($co_t2>0)printf \"%.2fx\",$co_t1/$co_t2; else printf \"n/a\"}") | status |")
 
+    # 4.2 — parallel-demo-v1 (3 integrações no mesmo order, stub lento 500ms).
+    # Resposta determinística → paridade total de result; v2 deve ser bem mais rápido.
+    test_case "4.2 parallel-demo-v1 — paridade total v1/v2 + speedup das Virtual Threads"
+    execute_and_measure v1 "parallel-demo-v1" '{"refId":"ABC123"}'
+    local pd_b1=$EXEC_BODY pd_t1=$EXEC_MS
+    execute_and_measure v2 "parallel-demo-v1" '{"refId":"ABC123"}'
+    local pd_b2=$EXEC_BODY pd_t2=$EXEC_MS
+
+    local parity_mark="?" parity_rc=0
+    compare_parity "$pd_b1" "$pd_b2" || parity_rc=$?
+    case $parity_rc in
+        0) success "Paridade v1/v2 confirmada (status+result+validations idênticos)"; parity_mark="✅" ;;
+        1) error "Divergência v1/v2 detectada em parallel-demo-v1!"; parity_mark="❌"
+           debug "v1: $(echo "$pd_b1" | head -c 200)"; debug "v2: $(echo "$pd_b2" | head -c 200)" ;;
+        2) warning "jq/python3 ausentes — paridade detalhada pulada (validado apenas status)"
+           echo "$pd_b1" | grep -q '"status":"SUCCESS"' && echo "$pd_b2" | grep -q '"status":"SUCCESS"' \
+               && parity_mark="~status~" || parity_mark="⚠" ;;
+    esac
+
+    # Asserção de speedup: v2 deve ser significativamente mais rápido (< 70% do v1).
+    if [ "$pd_t1" -gt 0 ] && [ "$pd_t2" -gt 0 ] && [ $((pd_t2 * 100)) -lt $((pd_t1 * 70)) ]; then
+        success "Speedup v2 confirmado: v1=${pd_t1}ms vs v2=${pd_t2}ms"
+    else
+        warning "Speedup v2 não evidente: v1=${pd_t1}ms vs v2=${pd_t2}ms (esperado v2 << v1)"
+    fi
+    PERF_ROWS+=("| parallel-demo-v1 | ${pd_t1}ms | ${pd_t2}ms | $(awk "BEGIN{if($pd_t2>0)printf \"%.2fx\",$pd_t1/$pd_t2; else printf \"n/a\"}") | $parity_mark |")
+
+    # 4.3 — smoke da rota v2 via BFF (proxy) para confirmar o caminho ponta a ponta.
     if [ -n "$AUTH_TOKEN" ]; then
-        test_case "4.2 POST via BFF /bff/flows/create-order-v1/versions/1.0.0/executions"
+        test_case "4.3 POST via BFF .../executions/v2 (proxy paralelo)"
         RESPONSE=$(curl -s -w "\n%{http_code}" -X POST \
-            "$BFF_URL/bff/flows/create-order-v1/versions/1.0.0/executions" \
+            "$BFF_URL/bff/flows/parallel-demo-v1/versions/1.0.0/executions/v2" \
             -H "Content-Type: application/json" \
             -H "Authorization: Bearer $AUTH_TOKEN" \
-            -d '{"clientId":"CLI001A"}')
+            -d '{"refId":"ABC123"}')
         HTTP_CODE=$(echo "$RESPONSE" | tail -1)
         BODY=$(echo "$RESPONSE" | head -n -1)
-        echo "$BODY" | grep -q "SUCCESS\|executionId\|result\|200" \
-            && success "Execução via BFF (HTTP $HTTP_CODE)" \
-            || warning "Execução via BFF — HTTP $HTTP_CODE: $(echo "$BODY" | head -c 100)"
+        echo "$BODY" | grep -q '"status":"SUCCESS"\|executionId' \
+            && success "Execução v2 via BFF (HTTP $HTTP_CODE)" \
+            || warning "Execução v2 via BFF — HTTP $HTTP_CODE: $(echo "$BODY" | head -c 100)"
     else
-        warning "4.2 Execução via BFF — pulado (sem token Authentik)"
+        warning "4.3 Execução v2 via BFF — pulado (sem token Authentik)"
     fi
 }
 
@@ -464,7 +603,7 @@ test_negative_scenarios() {
 
     test_case "5.2 Orchestrator sem Bearer → 401"
     CODE=$(curl -s -o /dev/null -w "%{http_code}" \
-        -X POST "$ORCH_URL/api/flows/create-order-v1/versions/1.0.0/executions" \
+        -X POST "$ORCH_URL/api/v1/flows/create-order-v1/versions/1.0.0/executions" \
         -H "Content-Type: application/json" -d '{}')
     [ "$CODE" = "401" ] && success "Orchestrator protegido (401 sem token)" \
         || warning "Orchestrator retornou $CODE sem token (esperado 401)"
@@ -473,7 +612,7 @@ test_negative_scenarios() {
     if [ -n "$ORCH_TOKEN" ]; then
         test_case "5.3 Workflow inexistente → 200 + status FAILED"
         RESP=$(orch_curl -s -w "\n%{http_code}" \
-            -X POST "$ORCH_URL/api/flows/nao-existe/versions/1.0.0/executions" \
+            -X POST "$ORCH_URL/api/v1/flows/nao-existe/versions/1.0.0/executions" \
             -H "Content-Type: application/json" -d '{}')
         CODE=$(echo "$RESP" | tail -1)
         BODY=$(echo "$RESP" | head -n -1)
@@ -485,7 +624,7 @@ test_negative_scenarios() {
 
         test_case "5.4 Payload inválido → 200 + status FAILED"
         RESP=$(orch_curl -s -w "\n%{http_code}" \
-            -X POST "$ORCH_URL/api/flows/create-order-v1/versions/1.0.0/executions" \
+            -X POST "$ORCH_URL/api/v1/flows/create-order-v1/versions/1.0.0/executions" \
             -H "Content-Type: application/json" -d '{}')
         CODE=$(echo "$RESP" | tail -1)
         BODY=$(echo "$RESP" | head -n -1)
@@ -523,6 +662,17 @@ Data: $(date)
 - Manager Token:      $([ -n "$MANAGER_TOKEN" ] && echo "✓ sim" || echo "✗ não")
 - Orchestrator Token: $([ -n "$ORCH_TOKEN" ]    && echo "✓ sim" || echo "✗ não")
 - Authentik Token:    $([ -n "$AUTH_TOKEN" ]     && echo "✓ sim" || echo "✗ não (testes BFF pulados)")
+
+## Comparativo de execução v1 (sequencial) x v2 (paralelo)
+
+| Workflow | Latência v1 | Latência v2 | Speedup | Paridade |
+|---|---|---|---|---|
+$(printf '%s\n' "${PERF_ROWS[@]}")
+
+> Paridade: ✅ = {status,result,validations} idênticos (via jq ou python3); \`status\` = apenas status
+> comparado (resposta com campos não-determinísticos); ⚠/~status~ = jq e python3 ausentes, detalhe pulado.
+> O speedup do \`parallel-demo-v1\` evidencia o paralelismo das Virtual Threads (3 integrações @ 500ms
+> no mesmo \`order\`): v1 ≈ soma sequencial; v2 ≈ a mais lenta das paralelas.
 
 ## Log detalhado
 $LOG_FILE

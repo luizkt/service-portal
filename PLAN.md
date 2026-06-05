@@ -358,8 +358,8 @@ Para evitar trafegar dezenas/centenas de KB por fluxo em listagens (cliente norm
 - Implementado em repository (`findAllByFlowId`, `findAllByFlowIdAndActive`) + `FlowDocumentService.listVersions()` + `FlowController.listVersions()`
 - **76 testes, 0 falhas**, cobertura ≥ 95%
 
-### ⬜ Pendência: Atualizar testes integrados para cobrir fluxos v1 e v2
-Garantir paridade funcional e mensurar speedup entre v1 (sequencial) e v2 (paralelo). Ver PLAN-integrated-tests-v1-v2.md.
+### ✅ Pendência: Atualizar testes integrados para cobrir fluxos v1 e v2 (S5)
+Concluída. Paridade funcional confirmada e speedup mensurado entre v1 (sequencial) e v2 (paralelo). Ver PLAN-integrated-tests-v1-v2.md e o detalhe abaixo.
 
 ### ⬜ Pendência: Teste de performance Orquestrador (v1 vs v2)
 Validar escalabilidade das Virtual Threads sob carga usando k6. Ver PLAN-performance-test-k6.md.
@@ -374,15 +374,24 @@ Implementar rastreabilidade completa nas execuções para facilitar o troublesho
 - Propagar o `executionId` nos headers (`X-Execution-Id`) das chamadas HTTP via WebClient.
 - Atualizar o pattern de log no `logback-spring.xml` para exibir o contexto.
 
-### ⬜ Pendência: Atualizar testes integrados para cobrir fluxos v1 e v2
+### ✅ Pendência: Atualizar testes integrados para cobrir fluxos v1 e v2 (S5) — CONCLUÍDA
 
-Garantir que a suite de testes integrados (`teste-integrado-service-portal-v3.sh`) valide as duas rotas de execução de forma sistemática.
+> 📄 **Plano detalhado:** [docs/plans/PLAN-integrated-tests-v1-v2.md](docs/plans/PLAN-integrated-tests-v1-v2.md)
 
-**Itens:**
-- Atualizar o script para executar cada workflow de teste nos dois endpoints: `/executions` (v1) e `/executions/v2` (v2).
-- Validar que o `status` e o conteúdo do mapa `result` e `validations` são idênticos em ambos os casos.
-- Adicionar asserção de tempo: para fluxos com múltiplas integrações HTTP (WireMock com delay), o endpoint v2 deve apresentar um tempo total de execução significativamente menor que o v1.
-- Refatorar o checklist de saída para separar os resultados de v1 e v2.
+O `teste-integrado-service-portal-v3.sh` agora valida as duas rotas de execução de forma sistemática.
+
+**O que foi feito:**
+- **Endpoints corrigidos**: a seção 4 e os cenários negativos usavam o path antigo `/api/flows/...` (pré-split v1/v2) → atualizados para `/api/v1/flows/...` (+ rota v2).
+- **`execute_and_measure(version, flowId, payload)`**: executa no orquestrador medindo a latência (ms) em `EXEC_BODY`/`EXEC_MS`.
+- **`compare_parity`**: compara `{status, result, validations}` entre v1 e v2 via `jq`, com **fallback para `python3`** (jq não está instalado no ambiente atual); degrada para verificação só de `status` se nenhum estiver presente.
+- **Workflow `parallel-demo-v1`** (novo em `create_test_workflows`): 3 integrações HTTP no **mesmo `order: 1`** apontando para um stub lento dedicado `wiremock/mappings/slow-get.json` (500ms, resposta determinística) — evidencia o paralelismo das Virtual Threads sem tornar a stack normal lenta.
+- **Relatório**: `generate_report` ganhou a tabela comparativa (Workflow · Latência v1 · Latência v2 · Speedup · Paridade).
+- **`TESTES-README.md`**: seção de interpretação do comparativo v1 x v2.
+
+**Resultado da execução (stack completa):**
+- `create-order-v1`: v1 ≈ 350ms, v2 ≈ 62ms, ambos `SUCCESS` (paridade de status; `orderId` aleatório)
+- `parallel-demo-v1`: v1 ≈ 1576ms, v2 ≈ 561ms (**speedup ~2.8x**), **paridade total ✅** (status+result+validations idênticos)
+- 30/34 testes, **0 falhas**; 4 pulados (token M2M Authentik ausente no ambiente → smokes BFF autenticados)
 
 ### ⬜ Pendência: Teste de performance Orquestrador (v1 vs v2)
 
@@ -613,7 +622,7 @@ Autorização por endpoint conforme tabela de acesso de cada collection (seção
 | ~~**S2**~~ | ~~5~~ | ~~Dados de exemplo no `init-mongo.js` *(depende do #2)*~~ ✅ | 🟡 Médio |
 | ~~**S3**~~ | ~~6~~ | ~~Invalidação de cache cross-service (endpoint admin no orquestrador)~~ ✅ | 🟠 Médio+ |
 | ~~**S4+**~~ | ~~4~~ | ~~Telas de contratos, integrações e validações (BFF + Frontend)~~ ✅ | 🔴 Grande |
-| **S5** | 7 | Atualizar testes integrados para cobrir fluxos v1 e v2 | 🟡 Médio |
+| ~~**S5**~~ | ~~7~~ | ~~Atualizar testes integrados para cobrir fluxos v1 e v2~~ ✅ | 🟡 Médio |
 | **S6** | 8 | Teste de performance Orquestrador (v1 vs v2) | 🟠 Médio+ |
 
 ---

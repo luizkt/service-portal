@@ -179,6 +179,36 @@ curl -H "Authorization: Bearer $TOKEN" http://localhost:8082/manager/flows
    - Status: 0/3 (requer autenticação)
 ```
 
+### Comparativo v1 (sequencial) x v2 (paralelo)
+
+A seção **4. EXECUÇÃO DE WORKFLOWS** do `teste-integrado-service-portal-v3.sh`
+executa cada workflow nas duas rotas do orquestrador e registra uma tabela
+comparativa no relatório (`teste-integrado-checklist-*.md`):
+
+| Workflow | Latência v1 | Latência v2 | Speedup | Paridade |
+|---|---|---|---|---|
+| create-order-v1 | ~300ms | ~60ms | — | status |
+| parallel-demo-v1 | ~1500ms | ~550ms | ~2.8x | ✅ |
+
+**Como interpretar:**
+
+- **Latência v1/v2** — tempo total (ms) medido no cliente para `POST /api/v1/...`
+  e `POST /api/v2/...` do mesmo workflow.
+- **Speedup** — razão `v1 / v2`. Só é relevante quando o workflow tem **múltiplas
+  integrações no mesmo `order`**: o v2 as executa em paralelo via Java Virtual
+  Threads, enquanto o v1 é sequencial. O `parallel-demo-v1` (3 integrações @ 500ms
+  no `order: 1`, via stub lento `wiremock/mappings/slow-get.json`) é o caso que
+  evidencia o ganho: v1 ≈ soma (~1500ms), v2 ≈ a mais lenta (~500ms).
+- **Paridade** — comparação semântica de `{status, result, validations}`:
+  - **✅** — idênticos entre v1 e v2 (comparação via `jq`, com fallback `python3`).
+  - **status** — apenas o `status` foi comparado, porque a resposta contém campos
+    não-determinísticos (ex.: `orderId` aleatório do `save-order` em `create-order-v1`).
+  - **⚠ / ~status~** — nem `jq` nem `python3` disponíveis: comparação detalhada pulada,
+    mantendo só a verificação de `status` HTTP/SUCCESS.
+
+> O `create-order-v1` tem integrações em `order` distintos (sequenciais por dependência),
+> então **não** apresenta speedup — serve como smoke funcional das duas rotas.
+
 ---
 
 ## 🛠️ Troubleshooting
