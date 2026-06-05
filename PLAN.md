@@ -114,6 +114,7 @@ Manager (Kotlin, :8082) — dono da collection `workflows` (após migração fas
 | **Execução da seção `validations` no pipeline do orquestrador** | Orquestrador | ✅ Feito | Fase validações após integrações em v1 e v2; reutiliza `IntegrationDefinition`; `FlowExecutionContext.validations` separado de `integrations`; `executePhase()` + `runStep(BiConsumer)` no v2; resposta inclui `result` (integrações) e `validations` (validações) como mapas separados; 87 testes, 0 falhas, gate JaCoCo ≥ 95% |
 | **Invalidação de cache cross-service (S3)** | Orquestrador + Manager | ✅ Feito | `CacheAdminController` (`DELETE /api/admin/cache/workflows[/{flowId}/versions/{version}]`) no orquestrador; Manager invalida via `RestClient` (`OrchestratorCacheClient` + `OrchestratorAuthService`) após `update()`/`deactivate()`; falha tolerante (warning, não propaga); validado e2e (chave Redis removida) + tolerância a falha; testes nos dois lados, gates JaCoCo ≥ 95% |
 | **Melhoria de logs: agrupamento por execução de flow (MDC/Tracing)** | Orquestrador | ✅ CONCLUÍDO (S8) | `ExecutionMdcFilter` (OncePerRequestFilter): captura/gera `executionId` via `X-Execution-Id`; MDC com `executionId`+`flowId`+`version`; propagação manual para Virtual Threads (v2); `X-Execution-Id` nos headers WebClient; `logback-spring.xml` com padrão MDC; 95 testes, 0 falhas |
+| **Monitoramento Avançado: Spring Boot Admin** | Todos os serviços | ✅ CONCLUÍDO (S9) | Novo módulo `service-portal-admin` (SBA Server 3.4.0 + Spring Security basic auth + form login); `spring-boot-admin-starter-client` em Orchestrator, BFF e Manager; actuator expandido (`threaddump`, `heapdump`, `loggers`, `env`, `beans`, `caches`); `/actuator/**` público em todos os SecurityConfig; `application-docker.yml` com `service-base-url` por serviço; docker-compose ativado na porta 8085 com healthcheck e `depends_on` nos 3 clients |
 
 ---
 
@@ -442,11 +443,7 @@ docker compose -f docker-compose-service-portal.yml up -d
 - ~~Substituir o uso do script `apply-license-header.sh` pelo comando `spotlessApply`.~~
 - ~~Validar se arquivos gerados (se houver) estão sendo ignorados.~~
 
-#### Monitoramento Avançado: Spring Boot Admin (SBA)
-- Criar serviço `spring-boot-admin` no Docker Compose.
-- Adicionar `spring-boot-admin-starter-client` ao Orchestrator, Manager e BFF.
-- Configurar segurança básica (SBA exige login se exposto).
-- Validar visualização de Thread Dump e Heap Dump em tempo real.
+#### ~~Monitoramento Avançado: Spring Boot Admin (SBA)~~ ✅ CONCLUÍDO (S9)
 
 #### Tracing Distribuído: Jaeger (OpenTelemetry)
 - Adicionar container `jaegertracing/all-in-one` à infraestrutura.
@@ -467,7 +464,20 @@ docker compose -f docker-compose-service-portal.yml up -d
 
 ---
 
-## Sessão mais recente — CONCLUÍDA ✅ (S8)
+## Sessão mais recente — CONCLUÍDA ✅ (S9)
+
+> Spring Boot Admin: servidor SBA com basic auth + form login, clientes nos 3 serviços, actuator expandido (threaddump, heapdump, loggers, env), UI disponível em http://localhost:8085.
+
+### O que foi feito
+
+- **`service-portal-admin/`** — novo módulo Spring Boot com `@EnableAdminServer`; `SecurityConfig` com form login + HTTP Basic + CSRF ignorado para `/instances/**`; `application.yml` com `spring.security.user.name/password`; Dockerfile multi-stage idêntico ao padrão dos outros módulos; porta 8085 (host) → 8080 (container)
+- **Orchestrator / BFF / Manager** — dependência `spring-boot-admin-starter-client:3.4.0` adicionada nos 3 `build.gradle.kts`; `spring.boot.admin.client.url` no `application.yml` (localhost:8085) e `application-docker.yml` (http://spring-boot-admin:8080 + `service-base-url` por serviço); `management.endpoints.web.exposure.include` expandido para `health,info,metrics,threaddump,heapdump,loggers,env,beans,caches`; `/actuator/**` liberado sem auth em todos os `SecurityConfig`
+- **docker-compose-service-portal.yml** — serviço `spring-boot-admin` ativado com healthcheck + `depends_on` adicionado em orchestrator, bff e manager; env vars `SPRING_BOOT_ADMIN_URL`, `SBA_USERNAME`, `SBA_PASSWORD` nos 3 serviços
+- **Todos os builds: `BUILD SUCCESSFUL`** (SBA server: 0 tests; Manager: 154/154; BFF e Orchestrator: sem regressão)
+
+---
+
+## Sessão anterior — CONCLUÍDA ✅ (S8)
 
 > MDC/Tracing nos logs do orquestrador: rastreabilidade end-to-end por execução (executionId, flowId, version) com propagação para Virtual Threads.
 
