@@ -99,6 +99,7 @@ Manager (Kotlin, :8082) — dono da collection `workflows` (após migração fas
 | **Fix Crítico: Healthcheck dos Containers** | Infra | ✅ CONCLUÍDO | docs/diagnostics/DIAGNOSTICO-HEALTHCHECK-CURL.md; Dockerfiles + apk curl |
 | **Diagnóstico dos Testes Integrados (v1)** | Raiz | ✅ CONCLUÍDO | docs/diagnostics/DIAGNOSTICO-TESTES-INTEGRADOS.md; script v2 criado |
 | Criação de arquivo AGENTS.md para cada aplicação | Todos | ✅ Feito | generic-orchestrator, bff, manager, frontend |
+| **Governança: Definição de Licenciamento** | Raiz | ✅ CONCLUÍDO | Licença MIT adicionada à raiz |
 | **Corrigir testes integrados** | Raiz + BFF | ✅ Feito | Script v3 criado; 32/33 (96%) passando, 0 falhas; 1 skipped = aviso jq ausente |
 | **Authentik automático no docker-compose** | Raiz + BFF | ✅ Feito | Blueprint `/authentik/blueprints/service-portal.yaml`; bootstrap vars; BFF multi-issuer JWT; global token endpoint; script v3 integrado com `.env` sourcing |
 | **Grupos de acesso + autorização por grupo** | Authentik + BFF | ✅ Feito | Blueprint: grupos ADMIN/RULES/WORKFLOWS + usuários it/bizop/workop; scope mapping `groups` claim no JWT; `@EnableMethodSecurity` + `JwtAuthenticationConverter`; `@PreAuthorize` em FlowProxyController; 40 testes passando |
