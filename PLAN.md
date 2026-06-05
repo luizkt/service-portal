@@ -95,9 +95,9 @@ Manager (Kotlin, :8082) — dono da collection `workflows` (após migração fas
 | Validação do `docker compose up` | Raiz | ✅ Feito | Todos os containers rodando saudáveis (healthy), todos os endpoints respondendo HTTP 200, stack completa validada |
 | Revisão dos cenarios de testes com novas atualizaćões | Raiz | ✅ Feito | YAMLs em inglês, endpoints REST atualizados, DATABASE removido, Manager integrado, script automático criado |
 | Diagnóstico e resolução de instabilidade dos containers | Raiz | ✅ CONCLUÍDO | Phase 1 ✅ Orchestrator (endpoints corrigidos); Phase 2 ✅ Manager (autenticação OK); Phase 3 ✅ Docker curl fix (containers healthy) |
-| **Análise detalhada: Estabilidade Manager & Erros 401** | Manager | ✅ CONCLUÍDO | DIAGNOSTICO-MANAGER-401.md; todos endpoints OK; containers healthy após curl fix |
-| **Fix Crítico: Healthcheck dos Containers** | Raiz | ✅ CONCLUÍDO | DIAGNOSTICO-HEALTHCHECK-CURL.md; Dockerfiles + apk curl; Manager/Orchestrator/BFF → HEALTHY ✅ |
-| **Diagnóstico dos Testes Integrados (v1)** | Raiz | ✅ CONCLUÍDO | Executado script v1; taxa 25% (5/20 passaram); 5 problemas catalogados; script v2 criado |
+| **Análise detalhada: Estabilidade Manager & Erros 401** | Manager | ✅ CONCLUÍDO | docs/diagnostics/DIAGNOSTICO-MANAGER-401.md; todos endpoints OK |
+| **Fix Crítico: Healthcheck dos Containers** | Infra | ✅ CONCLUÍDO | docs/diagnostics/DIAGNOSTICO-HEALTHCHECK-CURL.md; Dockerfiles + apk curl |
+| **Diagnóstico dos Testes Integrados (v1)** | Raiz | ✅ CONCLUÍDO | docs/diagnostics/DIAGNOSTICO-TESTES-INTEGRADOS.md; script v2 criado |
 | Criação de arquivo AGENTS.md para cada aplicação | Todos | ✅ Feito | generic-orchestrator, bff, manager, frontend |
 | **Corrigir testes integrados** | Raiz + BFF | ✅ Feito | Script v3 criado; 32/33 (96%) passando, 0 falhas; 1 skipped = aviso jq ausente |
 | **Authentik automático no docker-compose** | Raiz + BFF | ✅ Feito | Blueprint `/authentik/blueprints/service-portal.yaml`; bootstrap vars; BFF multi-issuer JWT; global token endpoint; script v3 integrado com `.env` sourcing |
@@ -425,6 +425,27 @@ Explorar e implementar uma suite de testes de carga para quantificar o benefíci
 - Vitest + jsdom + @testing-library/react configurados; gate de cobertura ≥ 95% no `vite.config.ts` (lines/functions/branches/statements). 41 testes em 4 arquivos — cobertura **100%** dos módulos `src/auth/**` e `src/api/**`
 
 ### ⬜ Pendente
+
+#### Monitoramento Avançado: Spring Boot Admin (SBA)
+- Criar serviço `spring-boot-admin` no Docker Compose.
+- Adicionar `spring-boot-admin-starter-client` ao Orchestrator, Manager e BFF.
+- Configurar segurança básica (SBA exige login se exposto).
+- Validar visualização de Thread Dump e Heap Dump em tempo real.
+
+#### Tracing Distribuído: Jaeger (OpenTelemetry)
+- Adicionar container `jaegertracing/all-in-one` à infraestrutura.
+- Adicionar Micrometer Tracing + OTLP Exporter nos 3 serviços Java/Kotlin.
+- Configurar amostragem (sampling) de 100% para ambiente de dev.
+- Validar propagação do `traceId` do BFF até as Virtual Threads do Orchestrator.
+
+#### Monitoramento: Dashboard Grafana
+- Configurar `prometheus.yml` para realizar o scrape de todos os serviços (BFF, Manager, Orchestrator).
+- Criar Dashboard no Grafana com filtro por variável `$service`.
+- Implementar painéis de Infra: CPU, Memória e Disco.
+- Implementar painéis de Aplicação: RPM (Requests per Minute).
+- Implementar painéis de Latência: Média, P95 e P99.
+- Implementar painéis de Status: Sucesso (2xx) vs Falhas (4xx/5xx).
+- Exportar o JSON do dashboard para o repositório (`docs/monitoring/dashboard.json`).
 
 (nenhum item pendente neste componente)
 

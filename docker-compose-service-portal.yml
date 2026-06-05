@@ -558,6 +558,63 @@ services:
       timeout: 10s
       retries: 5
 
+  # ---------------------------------------------------------------------------
+  # Prometheus — Coleta de métricas do Actuator
+  # ---------------------------------------------------------------------------
+  # prometheus:
+  #   image: prom/prometheus:latest
+  #   container_name: portal-prometheus
+  #   volumes:
+  #     - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
+  #   ports:
+  #     - "9090:9090"
+  #   networks:
+  #     - portal
+
+  # ---------------------------------------------------------------------------
+  # Grafana — Visualização gráfica das métricas
+  # ---------------------------------------------------------------------------
+  # grafana:
+  #   image: grafana/grafana:latest
+  #   container_name: portal-grafana
+  #   ports:
+  #     - "3000:3000"
+  #   environment:
+  #     - GF_SECURITY_ADMIN_PASSWORD=admin
+  #   networks:
+  #     - portal
+
+  # ---------------------------------------------------------------------------
+  # Spring Boot Admin — Gerenciamento visual das aplicações Spring
+  # ---------------------------------------------------------------------------
+  # spring-boot-admin:
+  #   build:
+  #     context: ./service-portal-admin
+  #     dockerfile: Dockerfile
+  #   container_name: portal-sba
+  #   ports:
+  #     - "8085:8080"
+  #   environment:
+  #     SPRING_BOOT_ADMIN_UI_TITLE: "Service Portal Admin"
+  #     SPRING_PROFILES_ACTIVE: "docker"
+  #   networks:
+  #     - portal
+
+  # ---------------------------------------------------------------------------
+  # Jaeger — Tracing Distribuído (OpenTelemetry)
+  # ---------------------------------------------------------------------------
+  # jaeger:
+  #   image: jaegertracing/all-in-one:latest
+  #   container_name: portal-jaeger
+  #   ports:
+  #     - "16686:16686" # UI
+  #     - "4317:4317"   # OTLP gRPC
+  #     - "4318:4318"   # OTLP HTTP
+  #   environment:
+  #     - COLLECTOR_OTLP_ENABLED=true
+  #   networks:
+  #     - portal
+
 # =============================================================================
 # Volumes
 # =============================================================================

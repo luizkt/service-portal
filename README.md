@@ -202,6 +202,5 @@ Cobertura atual:
 
 ## Documentação adicional
 
-- [PLAN.md](PLAN.md) — fonte da verdade do progresso e tarefas em andamento
-- [arquitetura-portal-service.md](arquitetura-portal-service.md) — desenho de arquitetura
-- [teste-integrado.md](teste-integrado.md) — cenários de teste integrado
+- [PLAN.md](PLAN.md) — Roadmap mestre, decisões e progresso.
+- [docs/MAP.md](docs/MAP.md) — Índice para arquitetura, guias e diagnósticos.

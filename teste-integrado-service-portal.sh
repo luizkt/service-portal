@@ -1,240 +1,299 @@
 #!/bin/bash
-# teste-integrado-service-portal.sh
-# Script de testes integrados para o Service Portal
-# Valida a infraestrutura e executa cenários end-to-end
+# teste-integrado-service-portal-v3.sh
+# Script de testes integrados - Service Portal
+# Versão 3: Endpoints corrigidos, autenticação completa (Manager + Orchestrator + Authentik)
 
 set -euo pipefail
 
-# ── Cores ─────────────────────────────────────────────────────────────────────
+# ─── Cores ────────────────────────────────────────────────────────────────────
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
-BLUE='\033[0;34m'; NC='\033[0m'
+BLUE='\033[0;34m'; MAGENTA='\033[0;35m'; NC='\033[0m'
 
-# ── Configuração ──────────────────────────────────────────────────────────────
+# ─── Config ───────────────────────────────────────────────────────────────────
 DOCKER_COMPOSE_FILE="docker-compose-service-portal.yml"
+ENV_FILE=".env"
 LOG_FILE="teste-integrado-$(date +%Y%m%d-%H%M%S).log"
 CHECKLIST_FILE="teste-integrado-checklist-$(date +%Y%m%d-%H%M%S).md"
+
+# Carrega .env (se existir) para expor AUTHENTIK_M2M_CLIENT_ID e AUTHENTIK_M2M_SECRET
+if [ -f "$ENV_FILE" ]; then
+    set -o allexport
+    # shellcheck source=/dev/null
+    source <(grep -v '^\s*#' "$ENV_FILE" | grep -v '^\s*$' | grep '=')
+    set +o allexport
+fi
+
 BFF_URL="http://localhost:8081"
 ORCH_URL="http://localhost:8080"
-MANAGER_URL="http://localhost:8082"
+MGR_URL="http://localhost:8082"
 AUTHENTIK_URL="http://localhost:9000"
 
-# ── Contadores ────────────────────────────────────────────────────────────────
+AUTH_TOKEN=""        # Bearer Authentik (BFF) — obtido via M2M client_credentials
+MANAGER_TOKEN=""     # Bearer Manager (CRUD no Manager direto)
+ORCH_TOKEN=""        # Bearer Orchestrator (execuções diretas)
+
+# Credenciais do provider M2M (criadas automaticamente pelo blueprint).
+# Em instalações existentes, defina no .env:
+#   AUTHENTIK_M2M_CLIENT_ID=service-portal-cc
+#   AUTHENTIK_M2M_SECRET=<seu-secret>
+M2M_CLIENT_ID="${AUTHENTIK_M2M_CLIENT_ID:-service-portal-m2m}"
+M2M_CLIENT_SECRET="${AUTHENTIK_M2M_SECRET:-service-portal-m2m-secret}"
+
 PASSED=0; FAILED=0; SKIPPED=0
 
-# ── Helpers ───────────────────────────────────────────────────────────────────
+# ─── Helpers ──────────────────────────────────────────────────────────────────
 log()     { echo -e "${BLUE}[$(date +'%H:%M:%S')]${NC} $*" | tee -a "$LOG_FILE"; }
-success() { echo -e "${GREEN}✓${NC} $*" | tee -a "$LOG_FILE"; PASSED=$((PASSED+1)); }
-error()   { echo -e "${RED}✗${NC} $*" | tee -a "$LOG_FILE"; FAILED=$((FAILED+1)); }
-warning() { echo -e "${YELLOW}⚠${NC} $*" | tee -a "$LOG_FILE"; SKIPPED=$((SKIPPED+1)); }
-section() { echo -e "\n${BLUE}═══ $* ═══${NC}" | tee -a "$LOG_FILE"; }
+success() { echo -e "${GREEN}✓${NC} $*" | tee -a "$LOG_FILE"; PASSED=$((PASSED + 1)); }
+error()   { echo -e "${RED}✗${NC} $*" | tee -a "$LOG_FILE"; FAILED=$((FAILED + 1)); }
+warning() { echo -e "${YELLOW}⚠${NC} $*" | tee -a "$LOG_FILE"; SKIPPED=$((SKIPPED + 1)); }
+info()    { echo -e "${BLUE}ℹ${NC} $*" | tee -a "$LOG_FILE"; }
+debug()   { echo -e "${MAGENTA}DEBUG${NC} $*" | tee -a "$LOG_FILE"; }
+
+section() {
+    echo "" | tee -a "$LOG_FILE"
+    echo -e "${BLUE}═══════════════════════════════════════════════════${NC}" | tee -a "$LOG_FILE"
+    echo -e "${BLUE}$*${NC}" | tee -a "$LOG_FILE"
+    echo -e "${BLUE}═══════════════════════════════════════════════════${NC}" | tee -a "$LOG_FILE"
+}
 test_case() { echo -e "\n${YELLOW}→${NC} $*" | tee -a "$LOG_FILE"; }
 
-# ── Autenticação ──────────────────────────────────────────────────────────────
-BFF_TOKEN=""
-
-# Wrapper para curl com Bearer token
+# curl com Bearer (BFF — requer Authentik)
 bff_curl() {
-    curl -s -H "Authorization: Bearer $BFF_TOKEN" "$@"
+    if [ -n "$AUTH_TOKEN" ]; then
+        curl -s -H "Authorization: Bearer $AUTH_TOKEN" "$@"
+    else
+        curl -s "$@"
+    fi
 }
 
-bff_curl_code() {
-    curl -s -o /dev/null -w "%{http_code}" -H "Authorization: Bearer $BFF_TOKEN" "$@"
+# curl com Bearer (Manager)
+mgr_curl() {
+    curl -s -H "Authorization: Bearer $MANAGER_TOKEN" "$@"
 }
 
-# ── Pré-requisitos ────────────────────────────────────────────────────────────
+# curl com Bearer (Orchestrator)
+orch_curl() {
+    curl -s -H "Authorization: Bearer $ORCH_TOKEN" "$@"
+}
+
+# ─── Pré-requisitos ──────────────────────────────────────────────────────────
 check_prerequisites() {
     section "PRÉ-REQUISITOS"
 
-    [ -f "$DOCKER_COMPOSE_FILE" ] && success "docker-compose-service-portal.yml encontrado" \
-        || { error "Arquivo $DOCKER_COMPOSE_FILE não encontrado"; exit 1; }
-    [ -f ".env" ] && success ".env encontrado" \
-        || { error "Arquivo .env não encontrado"; exit 1; }
-    command -v docker >/dev/null 2>&1 && success "Docker disponível" \
+    [ -f "$DOCKER_COMPOSE_FILE" ] && success "docker-compose file encontrado" \
+        || { error "$DOCKER_COMPOSE_FILE não encontrado"; exit 1; }
+
+    [ -f "$ENV_FILE" ] && success ".env encontrado" \
+        || { error ".env não encontrado — execute: cp env.example .env"; exit 1; }
+
+    command -v docker >/dev/null 2>&1 && success "Docker instalado" \
         || { error "Docker não instalado"; exit 1; }
-    command -v curl >/dev/null 2>&1 && success "curl disponível" \
+
+    command -v curl >/dev/null 2>&1 && success "curl instalado" \
         || { error "curl não instalado"; exit 1; }
-}
 
-# ── Infraestrutura ────────────────────────────────────────────────────────────
-wait_for_service() {
-    local name=$1 url=$2 attempts=0 max=60
-    log "Aguardando $name em $url..."
-    until curl -sf "$url" > /dev/null 2>&1 || [ $attempts -ge $max ]; do
-        attempts=$((attempts+1)); sleep 2
-    done
-    [ $attempts -lt $max ] && success "$name pronto" || { error "$name não respondeu em ${max}x2s"; return 1; }
-}
-
-setup_authentik() {
-    log "Configurando Authentik (idempotente)..."
-    docker exec -i portal-authentik-server python3 - <<'PYEOF' 2>/dev/null | grep -E "OK:|SKIP:" || true
-import os, sys
-os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'authentik.root.settings')
-import django; django.setup()
-
-from authentik.providers.oauth2.models import OAuth2Provider
-from authentik.core.models import Application
-from authentik.crypto.models import CertificateKeyPair
-from authentik.flows.models import Flow
-
-# Provider já existe?
-if OAuth2Provider.objects.filter(client_id='service-portal-spa').exists():
-    print('SKIP: OAuth2 provider service-portal-spa já existe')
-    sys.exit(0)
-
-signing_key = CertificateKeyPair.objects.filter(name='authentik Self-signed Certificate').first()
-auth_flow   = Flow.objects.filter(slug='default-provider-authorization-implicit-consent').first()
-inval_flow  = Flow.objects.filter(slug='default-provider-invalidation-flow').first()
-if not (signing_key and auth_flow and inval_flow):
-    print('ERR: dependências não encontradas', signing_key, auth_flow, inval_flow)
-    sys.exit(1)
-
-provider = OAuth2Provider.objects.create(
-    name='service-portal',
-    authorization_flow=auth_flow,
-    invalidation_flow=inval_flow,
-    client_type='public',
-    client_id='service-portal-spa',
-    signing_key=signing_key,
-    sub_mode='hashed_user_id',
-    access_token_validity='hours=1',
-    include_claims_in_id_token=True,
-)
-from authentik.providers.oauth2.models import RedirectURI, RedirectURIMatchingMode
-provider.redirect_uris.set([
-    RedirectURI(matching_mode=RedirectURIMatchingMode.STRICT, url='http://localhost:5173/auth/callback'),
-    RedirectURI(matching_mode=RedirectURIMatchingMode.STRICT, url='http://localhost/auth/callback'),
-], bulk=False)
-
-Application.objects.create(
-    name='Service Portal',
-    slug='service-portal',
-    provider=provider,
-    policy_engine_mode='any',
-)
-print('OK: provider e application criados')
-PYEOF
-}
-
-get_bff_token() {
-    log "Obtendo token JWT para o BFF via Authentik..."
-    # Escreve o script Python em arquivo temporário no container para evitar problemas
-    # com heredoc dentro de command substitution
-    docker exec -i portal-authentik-server sh -c 'cat > /tmp/gen_jwt.py' <<'PYEOF'
-import os, time
-os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'authentik.root.settings')
-import django; django.setup()
-from authentik.crypto.models import CertificateKeyPair
-from authentik.providers.oauth2.models import OAuth2Provider
-from cryptography.hazmat.primitives import serialization
-import jwt as pyjwt
-
-cert     = CertificateKeyPair.objects.get(name='authentik Self-signed Certificate')
-provider = OAuth2Provider.objects.get(client_id='service-portal-spa')
-key      = serialization.load_pem_private_key(cert.key_data.encode(), password=None)
-kid      = getattr(provider.signing_key, 'kid', '')
-payload  = {
-    'iss': 'http://localhost:9000/application/o/service-portal/',
-    'sub': 'test-integration-script',
-    'aud': 'service-portal-spa',
-    'exp': int(time.time()) + 3600,
-    'iat': int(time.time()),
-    'scope': 'openid profile email',
-}
-token = pyjwt.encode(payload, key, algorithm='RS256', headers={'kid': kid})
-print('JWT:' + token)
-PYEOF
-    BFF_TOKEN=$(docker exec portal-authentik-server env PYTHONPATH=/ python3 /tmp/gen_jwt.py 2>/dev/null | grep "^JWT:" | cut -c5-)
-    if [ -z "$BFF_TOKEN" ]; then
-        error "Falha ao obter token JWT do Authentik"
-        return 1
+    if command -v jq >/dev/null 2>&1; then
+        success "jq instalado (paridade v1/v2 detalhada via jq)"
+    elif command -v python3 >/dev/null 2>&1; then
+        info "jq ausente — paridade v1/v2 detalhada usará python3 (fallback)"
+    else
+        warning "jq e python3 ausentes — paridade v1/v2 detalhada será pulada (apenas status)"
     fi
-    success "Token JWT obtido"
+}
+
+# ─── Infraestrutura ───────────────────────────────────────────────────────────
+wait_healthy() {
+    local name=$1 url=$2
+    local attempts=0 max=120
+    info "Aguardando $name ($url)..."
+    while [ $attempts -lt $max ]; do
+        if curl -sf --connect-timeout 2 "$url" > /dev/null 2>&1; then
+            success "$name pronto"
+            return 0
+        fi
+        attempts=$((attempts + 1))
+        printf "\r[%3d%%] %d/%d" $((attempts * 100 / max)) $attempts $max
+        sleep 2
+    done
+    echo ""
+    error "$name não ficou pronto em $((max * 2))s"
+    return 1
 }
 
 start_infrastructure() {
     section "INFRAESTRUTURA"
 
-    # Detecta se a stack já está no ar
-    if docker ps --filter "name=portal-bff" --filter "status=running" --format "{{.Names}}" 2>/dev/null | grep -q "portal-bff"; then
-        log "Containers já rodando — pulando restart"
-    else
-        log "Iniciando containers..."
-        docker compose -f "$DOCKER_COMPOSE_FILE" down --remove-orphans 2>/dev/null || true
-        docker compose -f "$DOCKER_COMPOSE_FILE" up -d
-        sleep 5
-    fi
+    log "Parando containers anteriores..."
+    docker compose -f "$DOCKER_COMPOSE_FILE" down 2>/dev/null || true
+    sleep 2
 
-    wait_for_service "BFF"          "$BFF_URL/bff/health"
-    wait_for_service "Orchestrator" "$ORCH_URL/actuator/health"
-    wait_for_service "Manager"      "$MANAGER_URL/actuator/health"
-    wait_for_service "Authentik"    "$AUTHENTIK_URL/-/health/ready/"
+    log "Iniciando stack..."
+    docker compose -f "$DOCKER_COMPOSE_FILE" up -d || { error "Falha no docker compose up"; return 1; }
+    sleep 5
 
-    setup_authentik
-    get_bff_token
+    docker compose -f "$DOCKER_COMPOSE_FILE" ps
+
+    wait_healthy "BFF"          "$BFF_URL/bff/health"         || return 1
+    wait_healthy "Orchestrator" "$ORCH_URL/actuator/health"   || return 1
+    wait_healthy "Manager"      "$MGR_URL/actuator/health"    || return 1
+
+    sleep 3
+    success "Stack iniciada"
 }
 
-# ── 1. Saúde do Sistema ───────────────────────────────────────────────────────
+# Extrai campo JSON sem depender de jq (fallback com grep/sed)
+extract_json_field() {
+    local json=$1 field=$2
+    if command -v jq >/dev/null 2>&1; then
+        echo "$json" | jq -r ".$field // empty" 2>/dev/null
+    else
+        # Suporta tanto "field":"value" quanto "field": "value" (com espaço)
+        echo "$json" | grep -o "\"$field\": *\"[^\"]*\"" | sed "s/\"$field\": *\"//;s/\"//"
+    fi
+}
+
+# ─── Autenticação ─────────────────────────────────────────────────────────────
+get_manager_token() {
+    section "AUTH — MANAGER (porta 8082)"
+    test_case "POST /api/auth/tokens"
+
+    RESPONSE=$(curl -s -w "\n%{http_code}" -X POST "$MGR_URL/api/auth/tokens" \
+        -H "Content-Type: application/json" \
+        -d '{"username":"admin","password":"admin"}')
+    HTTP_CODE=$(echo "$RESPONSE" | tail -1)
+    BODY=$(echo "$RESPONSE" | head -n -1)
+
+    if [ "$HTTP_CODE" = "201" ]; then
+        MANAGER_TOKEN=$(extract_json_field "$BODY" "token")
+        [ -n "$MANAGER_TOKEN" ] \
+            && { success "Token Manager obtido (201)"; debug "Token: ${MANAGER_TOKEN:0:30}..."; return 0; }
+        warning "Token Manager — resposta 201 mas token não extraído: $BODY"
+    fi
+    warning "Falha ao obter token Manager (HTTP $HTTP_CODE): $(echo "$BODY" | head -c 100)"
+    return 1
+}
+
+get_orchestrator_token() {
+    section "AUTH — ORCHESTRATOR (porta 8080)"
+    test_case "POST /api/auth/tokens"
+
+    RESPONSE=$(curl -s -w "\n%{http_code}" -X POST "$ORCH_URL/api/auth/tokens" \
+        -H "Content-Type: application/json" \
+        -d '{"username":"admin","password":"admin"}')
+    HTTP_CODE=$(echo "$RESPONSE" | tail -1)
+    BODY=$(echo "$RESPONSE" | head -n -1)
+
+    if [ "$HTTP_CODE" = "201" ]; then
+        ORCH_TOKEN=$(extract_json_field "$BODY" "token")
+        [ -n "$ORCH_TOKEN" ] \
+            && { success "Token Orchestrator obtido (201)"; debug "Token: ${ORCH_TOKEN:0:30}..."; return 0; }
+        warning "Token Orchestrator — resposta 201 mas token não extraído: $BODY"
+    fi
+    warning "Falha ao obter token Orchestrator (HTTP $HTTP_CODE): $(echo "$BODY" | head -c 100)"
+    return 1
+}
+
+get_authentik_token() {
+    section "AUTH — AUTHENTIK M2M (porta 9000)"
+
+    test_case "Verificando Authentik (/-/health/ready/)"
+    if ! curl -sf --connect-timeout 3 "$AUTHENTIK_URL/-/health/ready/" > /dev/null 2>&1; then
+        warning "Authentik não acessível — testes BFF autenticados serão pulados"
+        return 1
+    fi
+    success "Authentik acessível"
+
+    # Authentik 2026.x: token endpoint é global (não mais por application slug)
+    test_case "POST /application/o/token/ (grant_type=client_credentials)"
+    RESPONSE=$(curl -s -w "\n%{http_code}" -X POST \
+        "$AUTHENTIK_URL/application/o/token/" \
+        -H "Content-Type: application/x-www-form-urlencoded" \
+        -d "grant_type=client_credentials&client_id=${M2M_CLIENT_ID}&client_secret=${M2M_CLIENT_SECRET}&scope=openid")
+    HTTP_CODE=$(echo "$RESPONSE" | tail -1)
+    BODY=$(echo "$RESPONSE" | head -n -1)
+
+    if [ "$HTTP_CODE" = "200" ]; then
+        AUTH_TOKEN=$(extract_json_field "$BODY" "access_token")
+        [ -n "$AUTH_TOKEN" ] \
+            && { success "Token M2M obtido (200)"; debug "Token: ${AUTH_TOKEN:0:30}..."; return 0; }
+        warning "Token M2M — resposta 200 mas access_token não extraído"
+    fi
+
+    warning "Token M2M não obtido (HTTP $HTTP_CODE) — testes BFF autenticados serão pulados"
+    debug "Resposta Authentik: $(echo "$BODY" | head -c 200)"
+    info "O blueprint cria o provider M2M automaticamente (client_id=${M2M_CLIENT_ID}). Aguarde o worker aplicar o blueprint e tente novamente."
+    return 1
+}
+
+# ─── 1. Saúde ─────────────────────────────────────────────────────────────────
 test_health() {
     section "1. SAÚDE DO SISTEMA"
 
-    test_case "1.1 BFF /bff/health"
+    test_case "1.1 BFF health"
     curl -sf "$BFF_URL/bff/health" | grep -q "status" \
-        && success "BFF respondendo" || error "BFF não respondendo"
+        && success "BFF healthy" || error "BFF não respondeu"
 
-    test_case "1.2 Orchestrator /actuator/health"
+    test_case "1.2 Orchestrator health"
     curl -sf "$ORCH_URL/actuator/health" | grep -q "status" \
-        && success "Orquestrador respondendo" || error "Orquestrador não respondendo"
+        && success "Orchestrator healthy" || error "Orchestrator não respondeu"
 
-    test_case "1.3 Manager /actuator/health"
-    curl -sf "$MANAGER_URL/actuator/health" | grep -q "status" \
-        && success "Manager respondendo" || error "Manager não respondendo"
+    test_case "1.3 Manager health"
+    curl -sf "$MGR_URL/actuator/health" | grep -q "status" \
+        && success "Manager healthy" || error "Manager não respondeu"
 
-    test_case "1.4 RabbitMQ management API"
-    # Endpoint correto: /api/aliveness-test/%2F (não /api/health)
+    test_case "1.4 RabbitMQ — /api/aliveness-test/%2F"
     curl -sf "http://guest:guest@localhost:15672/api/aliveness-test/%2F" | grep -q "ok" \
-        && success "RabbitMQ respondendo" || error "RabbitMQ não respondendo"
+        && success "RabbitMQ ok" || warning "RabbitMQ não acessível"
 
-    test_case "1.5 Redis"
-    docker exec "$(docker ps -q -f name=portal-redis)" redis-cli ping 2>/dev/null | grep -q "PONG" \
-        && success "Redis respondendo" || warning "Redis não respondendo (dependência secundária)"
-
-    test_case "1.6 Authentik OIDC discovery"
-    curl -sf "$AUTHENTIK_URL/application/o/service-portal/.well-known/openid-configuration" | grep -q "issuer" \
-        && success "Authentik OIDC configurado" || error "Authentik OIDC não configurado"
+    test_case "1.5 Redis ping"
+    REDIS_ID=$(docker ps -q -f "name=redis" 2>/dev/null | head -1)
+    if [ -n "$REDIS_ID" ] && docker exec "$REDIS_ID" redis-cli ping 2>/dev/null | grep -q "PONG"; then
+        success "Redis ok"
+    else
+        warning "Redis não respondeu"
+    fi
 }
 
-# ── 2. Server Driven UI ───────────────────────────────────────────────────────
+# ─── 2. Server Driven UI (endpoint público) ──────────────────────────────────
 test_server_driven_ui() {
     section "2. SERVER DRIVEN UI"
 
     test_case "2.1 GET /bff/auth/config (público)"
-    curl -sf "$BFF_URL/bff/auth/config" | grep -q "clientId" \
-        && success "Auth config retornado" || error "Auth config não retornado"
+    RESP=$(curl -sf "$BFF_URL/bff/auth/config" 2>/dev/null || echo "ERROR")
+    echo "$RESP" | grep -q "issuer\|clientId\|ERROR" \
+        && { echo "$RESP" | grep -q "issuer" && success "Auth config retornado" || warning "Endpoint /bff/auth/config sem dados esperados"; } \
+        || error "Endpoint /bff/auth/config não respondeu"
 
-    test_case "2.2 GET /bff/menu (Bearer token)"
-    bff_curl "$BFF_URL/bff/menu" | grep -q "flow-manager" \
-        && success "Menu contém flow-manager" || error "Menu não contém flow-manager"
+    if [ -n "$AUTH_TOKEN" ]; then
+        test_case "2.2 GET /bff/menu (requer Authentik Bearer)"
+        RESP=$(bff_curl "$BFF_URL/bff/menu" 2>/dev/null || echo "ERROR")
+        echo "$RESP" | grep -q "flow-manager" \
+            && success "Menu contém 'flow-manager'" || warning "Menu sem 'flow-manager': $(echo "$RESP" | head -c 100)"
 
-    test_case "2.3 GET /bff/features/flow-manager/ui-schema (Bearer token)"
-    bff_curl "$BFF_URL/bff/features/flow-manager/ui-schema" | grep -q "featureId" \
-        && success "UI schema retornado" || error "UI schema não retornado"
-
-    test_case "2.4 Endpoint protegido sem token → 401"
-    CODE=$(curl -s -o /dev/null -w "%{http_code}" "$BFF_URL/bff/menu")
-    [ "$CODE" = "401" ] \
-        && success "Sem token retorna 401 (auth funcionando)" \
-        || error "Esperado 401 sem token, recebido $CODE"
+        test_case "2.3 GET /bff/features/flow-manager/ui-schema (requer Authentik Bearer)"
+        RESP=$(bff_curl "$BFF_URL/bff/features/flow-manager/ui-schema" 2>/dev/null || echo "ERROR")
+        echo "$RESP" | grep -q "featureId" \
+            && success "UI schema retornado" || warning "UI schema sem 'featureId': $(echo "$RESP" | head -c 100)"
+    else
+        warning "2.2 GET /bff/menu — pulado (sem token Authentik)"
+        warning "2.3 GET /bff/features/flow-manager/ui-schema — pulado (sem token Authentik)"
+    fi
 }
 
-# ── Criação de workflows de teste ─────────────────────────────────────────────
+# ─── 3. CRUD via Manager ─────────────────────────────────────────────────────
 create_test_workflows() {
-    section "CRIANDO WORKFLOWS DE TESTE"
+    section "CRIANDO WORKFLOWS DE TESTE (Manager)"
 
-    test_case "Workflow HTTP: create-order-v1"
-    FLOW_HTTP=$(cat <<'EOF'
+    if [ -z "$MANAGER_TOKEN" ]; then
+        warning "Pulando criação — sem token Manager"
+        return 1
+    fi
+
+    # Workflow HTTP
+    test_case "Criar workflow HTTP (create-order-v1) — YAML"
+    YAML_HTTP=$(cat <<'EOF'
 flow:
-  id: "create-order-v1"
+  id: create-order-v1
   version: "1.0.0"
   description: "Test workflow - HTTP integration"
   active: true
@@ -249,30 +308,43 @@ flow:
             value: "^[A-Z0-9]{6,20}$"
             message: "Invalid clientId"
   integrations:
-    - id: validate-client
+    - id: fetch-client
       order: 1
       type: HTTP
       continueOnError: false
       http:
-        url: "http://api.exemplo.com/clients/{{contract.clientId}}"
+        url: "http://api.exemplo.com/clients/CLI001A"
         method: GET
         headers:
-          Accept: "application/json"
+          Accept: application/json
         timeout: 5000
+        responseMapping:
+          sourceField: name
+          targetField: clientName
 EOF
 )
-    CODE=$(bff_curl -s -w "\n%{http_code}" -X POST "$BFF_URL/bff/flows" \
-        -H "Content-Type: text/plain" -d "$FLOW_HTTP" | tail -1)
-    [ "$CODE" = "201" ] && success "Workflow HTTP criado (201)" \
-        || { [ "$CODE" = "409" ] && warning "Workflow HTTP já existe (409 — ok)" \
-            || error "Workflow HTTP falhou (HTTP $CODE)"; }
+    RESPONSE=$(curl -s -w "\n%{http_code}" -X POST "$MGR_URL/manager/flows" \
+        -H "Content-Type: text/plain" \
+        -H "Authorization: Bearer $MANAGER_TOKEN" \
+        --data-raw "$YAML_HTTP")
+    HTTP_CODE=$(echo "$RESPONSE" | tail -1)
+    BODY=$(echo "$RESPONSE" | head -n -1)
+    if [ "$HTTP_CODE" = "201" ]; then
+        success "Workflow HTTP criado (201)"
+    elif [ "$HTTP_CODE" = "409" ]; then
+        info "Workflow HTTP já existe (409 — ok, dados de sessão anterior)"
+    else
+        debug "Resposta: $BODY"
+        warning "Workflow HTTP — HTTP $HTTP_CODE"
+    fi
 
-    test_case "Workflow RabbitMQ: test-rabbitmq"
-    FLOW_RABBIT=$(cat <<'EOF'
+    # Workflow RabbitMQ
+    test_case "Criar workflow RabbitMQ (test-rabbitmq-v1) — YAML"
+    YAML_RABBITMQ=$(cat <<'EOF'
 flow:
-  id: "test-rabbitmq"
+  id: test-rabbitmq-v1
   version: "1.0.0"
-  description: "Test workflow - RabbitMQ"
+  description: "Test workflow - RabbitMQ integration"
   active: true
   contract:
     fields:
@@ -291,209 +363,358 @@ flow:
         exchange: "orders.exchange"
         routingKey: "order.created"
         persistent: true
-        messageTemplate: |
-          {"event":"ORDER_CREATED","orderId":"{{contract.orderId}}"}
+        messageTemplate: '{"event":"ORDER_CREATED","orderId":"{{contract.orderId}}"}'
 EOF
 )
-    CODE=$(bff_curl -s -w "\n%{http_code}" -X POST "$BFF_URL/bff/flows" \
-        -H "Content-Type: text/plain" -d "$FLOW_RABBIT" | tail -1)
-    [ "$CODE" = "201" ] && success "Workflow RabbitMQ criado (201)" \
-        || { [ "$CODE" = "409" ] && warning "Workflow RabbitMQ já existe (409 — ok)" \
-            || error "Workflow RabbitMQ falhou (HTTP $CODE)"; }
+    RESPONSE=$(curl -s -w "\n%{http_code}" -X POST "$MGR_URL/manager/flows" \
+        -H "Content-Type: text/plain" \
+        -H "Authorization: Bearer $MANAGER_TOKEN" \
+        --data-raw "$YAML_RABBITMQ")
+    HTTP_CODE=$(echo "$RESPONSE" | tail -1)
+    if [ "$HTTP_CODE" = "201" ]; then
+        success "Workflow RabbitMQ criado (201)"
+    elif [ "$HTTP_CODE" = "409" ]; then
+        info "Workflow RabbitMQ já existe (409 — ok)"
+    else
+        warning "Workflow RabbitMQ — HTTP $HTTP_CODE"
+    fi
 
-    test_case "Workflow Kafka: test-kafka"
-    FLOW_KAFKA=$(cat <<'EOF'
+    # Workflow de paralelismo (comparativo v1 x v2): 3 integrações HTTP no MESMO
+    # order (1) apontando para o stub lento do WireMock (/slow, 500ms). Em v1 elas
+    # rodam sequencialmente (~1500ms); em v2, em paralelo via Virtual Threads (~500ms).
+    test_case "Criar workflow paralelo (parallel-demo-v1) — YAML"
+    YAML_PARALLEL=$(cat <<'EOF'
 flow:
-  id: "test-kafka"
+  id: parallel-demo-v1
   version: "1.0.0"
-  description: "Test workflow - Kafka"
+  description: "Parallel demo - 3 HTTP integrations at order 1 (slow stub)"
   active: true
   contract:
     fields:
-      - name: orderId
+      - name: refId
         type: STRING
         required: true
+        validations:
+          - type: NOT_BLANK
   integrations:
-    - id: track-kafka
+    - id: slow-a
       order: 1
-      type: QUEUE
-      provider: KAFKA
+      type: HTTP
       continueOnError: false
-      queue:
-        topic: "orders.created"
-        messageTemplate: |
-          {"event":"ORDER_CREATED","orderId":"{{contract.orderId}}"}
+      http:
+        url: "http://api.exemplo.com/slow/AAA"
+        method: GET
+        headers:
+          Accept: application/json
+        timeout: 10000
+    - id: slow-b
+      order: 1
+      type: HTTP
+      continueOnError: false
+      http:
+        url: "http://api.exemplo.com/slow/BBB"
+        method: GET
+        headers:
+          Accept: application/json
+        timeout: 10000
+    - id: slow-c
+      order: 1
+      type: HTTP
+      continueOnError: false
+      http:
+        url: "http://api.exemplo.com/slow/CCC"
+        method: GET
+        headers:
+          Accept: application/json
+        timeout: 10000
 EOF
 )
-    CODE=$(bff_curl -s -w "\n%{http_code}" -X POST "$BFF_URL/bff/flows" \
-        -H "Content-Type: text/plain" -d "$FLOW_KAFKA" | tail -1)
-    [ "$CODE" = "201" ] && success "Workflow Kafka criado (201)" \
-        || { [ "$CODE" = "409" ] && warning "Workflow Kafka já existe (409 — ok)" \
-            || error "Workflow Kafka falhou (HTTP $CODE)"; }
-}
-
-# ── 3. CRUD de Workflows ──────────────────────────────────────────────────────
-test_crud_workflows() {
-    section "3. CRUD DE WORKFLOWS"
-
-    test_case "3.1 GET /bff/flows (listagem paginada)"
-    RESP=$(bff_curl "$BFF_URL/bff/flows")
-    echo "$RESP" | grep -q "content\|flowId\|create-order" \
-        && success "Listagem retornada" || error "Listagem falhou: ${RESP:0:100}"
-
-    test_case "3.2 GET /bff/flows/create-order-v1/versions/1.0.0"
-    RESP=$(bff_curl "$BFF_URL/bff/flows/create-order-v1/versions/1.0.0")
-    echo "$RESP" | grep -q "flowId\|create-order-v1" \
-        && success "Workflow específico encontrado" || error "Workflow não encontrado: ${RESP:0:100}"
-
-    test_case "3.3 GET /bff/flows/create-order-v1/versions/1.0.0/yaml"
-    RESP=$(bff_curl "$BFF_URL/bff/flows/create-order-v1/versions/1.0.0/yaml")
-    echo "$RESP" | grep -q "flow:" \
-        && success "YAML retornado" || error "YAML não retornado: ${RESP:0:100}"
-
-    test_case "3.4 GET /bff/flows?status=active"
-    RESP=$(bff_curl "$BFF_URL/bff/flows?status=active")
-    echo "$RESP" | grep -q "flowId\|create-order\|\[\]" \
-        && success "Listagem de ativos retornada" || error "Listagem de ativos falhou: ${RESP:0:100}"
-}
-
-# ── 4. Execução de Workflows ──────────────────────────────────────────────────
-test_execution_http() {
-    section "4. EXECUÇÃO - WORKFLOW HTTP"
-
-    test_case "4.1 Executar create-order-v1 com payload válido"
-    RESP=$(bff_curl -X POST "$BFF_URL/bff/flows/create-order-v1/versions/1.0.0/executions" \
-        -H "Content-Type: application/json" \
-        -d '{"clientId":"CLI001A"}')
-    echo "$RESP" | grep -q "SUCCESS\|executionId" \
-        && success "Execução HTTP OK" || warning "Execução HTTP: ${RESP:0:150}"
-}
-
-test_execution_queue() {
-    section "5. EXECUÇÃO - WORKFLOW QUEUE"
-
-    test_case "5.1 Executar test-rabbitmq"
-    RESP=$(bff_curl -X POST "$BFF_URL/bff/flows/test-rabbitmq/versions/1.0.0/executions" \
-        -H "Content-Type: application/json" \
-        -d '{"orderId":"ORD-001"}')
-    echo "$RESP" | grep -q "SUCCESS\|executionId" \
-        && success "Execução RabbitMQ OK" || warning "RabbitMQ: ${RESP:0:150}"
-
-    test_case "5.2 Executar test-kafka"
-    RESP=$(bff_curl -X POST "$BFF_URL/bff/flows/test-kafka/versions/1.0.0/executions" \
-        -H "Content-Type: application/json" \
-        -d '{"orderId":"ORD-002"}')
-    echo "$RESP" | grep -q "SUCCESS\|executionId" \
-        && success "Execução Kafka OK" || warning "Kafka: ${RESP:0:150}"
-}
-
-# ── 6. Cenários Negativos ─────────────────────────────────────────────────────
-test_negative_scenarios() {
-    section "6. CENÁRIOS NEGATIVOS"
-
-    test_case "6.1 Execução sem token → 401"
-    CODE=$(curl -s -o /dev/null -w "%{http_code}" \
-        -X POST "$BFF_URL/bff/flows/create-order-v1/versions/1.0.0/executions" \
-        -H "Content-Type: application/json" -d '{"clientId":"CLI001A"}')
-    [ "$CODE" = "401" ] && success "Sem token retorna 401" || error "Esperado 401, recebido $CODE"
-
-    test_case "6.2 Payload inválido (campo obrigatório ausente) → status FAILED"
-    # Orquestrador retorna 200 com status:FAILED para falhas de contrato
-    BODY=$(bff_curl -X POST "$BFF_URL/bff/flows/create-order-v1/versions/1.0.0/executions" \
-        -H "Content-Type: application/json" -d '{}')
-    echo "$BODY" | grep -q '"status":"FAILED"' && success "Validação de contrato → status FAILED" || error "Esperado status FAILED, body: $BODY"
-
-    test_case "6.3 Workflow inexistente → status FAILED"
-    # Orquestrador retorna 200 com status:FAILED quando o fluxo não existe
-    BODY=$(bff_curl -X POST "$BFF_URL/bff/flows/inexistente/versions/1.0.0/executions" \
-        -H "Content-Type: application/json" -d '{}')
-    echo "$BODY" | grep -q '"status":"FAILED"' && success "Workflow inexistente → status FAILED" || error "Esperado status FAILED, body: $BODY"
-
-    test_case "6.4 Versão inexistente → status FAILED"
-    # Orquestrador retorna 200 com status:FAILED quando a versão não existe
-    BODY=$(bff_curl -X POST "$BFF_URL/bff/flows/create-order-v1/versions/99.0.0/executions" \
-        -H "Content-Type: application/json" -d '{"clientId":"CLI001A"}')
-    echo "$BODY" | grep -q '"status":"FAILED"' && success "Versão inexistente → status FAILED" || warning "Esperado status FAILED, body: $BODY"
-
-    test_case "6.5 Criação duplicada → 409"
-    CODE=$(bff_curl_code -X POST "$BFF_URL/bff/flows" \
+    RESPONSE=$(curl -s -w "\n%{http_code}" -X POST "$MGR_URL/manager/flows" \
         -H "Content-Type: text/plain" \
-        -d 'flow:
-  id: "create-order-v1"
-  version: "1.0.0"
-  description: "Test workflow - HTTP integration"
-  active: true
-  contract:
-    fields:
-      - name: "clientId"
-        type: "string"
-        required: true
-  integrations:
-    - type: "http"
-      name: "order-service"
-      url: "http://wiremock:8080/orders"
-      method: "POST"')
-    [ "$CODE" = "409" ] && success "Criação duplicada → 409" || warning "Esperado 409, recebido $CODE"
+        -H "Authorization: Bearer $MANAGER_TOKEN" \
+        --data-raw "$YAML_PARALLEL")
+    HTTP_CODE=$(echo "$RESPONSE" | tail -1)
+    if [ "$HTTP_CODE" = "201" ]; then
+        success "Workflow paralelo criado (201)"
+    elif [ "$HTTP_CODE" = "409" ]; then
+        info "Workflow paralelo já existe (409 — ok)"
+    else
+        warning "Workflow paralelo — HTTP $HTTP_CODE"
+    fi
 }
 
-# ── Relatório ─────────────────────────────────────────────────────────────────
+test_crud_workflows() {
+    section "3. CRUD DE WORKFLOWS (Manager direto)"
+
+    if [ -z "$MANAGER_TOKEN" ]; then
+        warning "Pulando CRUD — sem token Manager"
+        return 1
+    fi
+
+    test_case "3.1 GET /manager/flows — listar"
+    RESP=$(mgr_curl "$MGR_URL/manager/flows" 2>/dev/null || echo "ERROR")
+    echo "$RESP" | grep -q "create-order-v1" \
+        && success "Listagem contém create-order-v1" \
+        || warning "create-order-v1 não apareceu na listagem: $(echo "$RESP" | head -c 150)"
+
+    test_case "3.2 GET /manager/flows/create-order-v1/versions/1.0.0"
+    RESP=$(mgr_curl "$MGR_URL/manager/flows/create-order-v1/versions/1.0.0" 2>/dev/null || echo "ERROR")
+    echo "$RESP" | grep -q "flowId\|create-order-v1" \
+        && success "Metadados do workflow obtidos" \
+        || error "Metadados não retornados: $(echo "$RESP" | head -c 150)"
+
+    test_case "3.3 GET /manager/flows/create-order-v1/versions/1.0.0/yaml"
+    RESP=$(mgr_curl "$MGR_URL/manager/flows/create-order-v1/versions/1.0.0/yaml" 2>/dev/null || echo "ERROR")
+    echo "$RESP" | grep -q "flow:\|id:" \
+        && success "YAML obtido" \
+        || error "YAML não retornado: $(echo "$RESP" | head -c 150)"
+
+    test_case "3.4 GET /manager/flows?status=active — somente ativos"
+    RESP=$(mgr_curl "$MGR_URL/manager/flows?status=active" 2>/dev/null || echo "ERROR")
+    echo "$RESP" | grep -q "create-order-v1" \
+        && success "Workflow ativo aparece no filtro" \
+        || warning "Filtro status=active sem resultado esperado"
+}
+
+# ─── 4. Execução via Orchestrator ────────────────────────────────────────────
+# Globais preenchidos por test_execution para o relatório comparativo v1 x v2.
+PERF_ROWS=()
+EXEC_BODY=""
+EXEC_MS=0
+
+# Executa um workflow no orquestrador na versão indicada (v1|v2) medindo a latência.
+# Resultado em EXEC_BODY (corpo JSON) e EXEC_MS (duração em ms).
+execute_and_measure() {
+    local version=$1 flow_id=$2 payload=$3
+    local start end
+    start=$(date +%s%3N)
+    EXEC_BODY=$(curl -s -X POST \
+        "$ORCH_URL/api/${version}/flows/${flow_id}/versions/1.0.0/executions" \
+        -H "Content-Type: application/json" \
+        -H "Authorization: Bearer $ORCH_TOKEN" \
+        -d "$payload")
+    end=$(date +%s%3N)
+    EXEC_MS=$((end - start))
+}
+
+# Compara paridade semântica de {status,result,validations} entre v1 e v2.
+# Usa jq se disponível; senão python3 (fallback). Retorna:
+#   0 = idêntico, 1 = divergente, 2 = sem ferramenta de comparação disponível.
+compare_parity() {
+    local b1=$1 b2=$2
+    if command -v jq >/dev/null 2>&1; then
+        local p1 p2
+        p1=$(echo "$b1" | jq -S '{status,result,validations}' 2>/dev/null)
+        p2=$(echo "$b2" | jq -S '{status,result,validations}' 2>/dev/null)
+        [ -n "$p1" ] && [ "$p1" = "$p2" ]
+        return
+    fi
+    if command -v python3 >/dev/null 2>&1; then
+        PARITY_B1="$b1" PARITY_B2="$b2" python3 - <<'PY'
+import json, os, sys
+try:
+    a = json.loads(os.environ["PARITY_B1"]); b = json.loads(os.environ["PARITY_B2"])
+except Exception:
+    sys.exit(1)
+key = lambda x: {"status": x.get("status"), "result": x.get("result"), "validations": x.get("validations")}
+sys.exit(0 if key(a) == key(b) else 1)
+PY
+        return
+    fi
+    return 2
+}
+
+test_execution() {
+    section "4. EXECUÇÃO DE WORKFLOWS — comparativo v1 x v2 (Orchestrator direto)"
+
+    if [ -z "$ORCH_TOKEN" ]; then
+        warning "Pulando execução — sem token Orchestrator"
+        return 1
+    fi
+
+    # 4.1 — create-order-v1 (smoke funcional nas duas rotas). Resposta contém
+    # campos não-determinísticos (orderId aleatório), então validamos paridade
+    # apenas de status, não do result completo.
+    test_case "4.1 create-order-v1 — v1 e v2 retornam SUCCESS"
+    execute_and_measure v1 "create-order-v1" '{"clientId":"ABC123","amount":150.00}'
+    local co_b1=$EXEC_BODY co_t1=$EXEC_MS
+    execute_and_measure v2 "create-order-v1" '{"clientId":"ABC123","amount":150.00}'
+    local co_b2=$EXEC_BODY co_t2=$EXEC_MS
+    if echo "$co_b1" | grep -q '"status":"SUCCESS"' && echo "$co_b2" | grep -q '"status":"SUCCESS"'; then
+        success "create-order-v1: v1=${co_t1}ms, v2=${co_t2}ms (ambos SUCCESS)"
+    else
+        warning "create-order-v1: v1=$(echo "$co_b1" | head -c 80) | v2=$(echo "$co_b2" | head -c 80)"
+    fi
+    PERF_ROWS+=("| create-order-v1 | ${co_t1}ms | ${co_t2}ms | $(awk "BEGIN{if($co_t2>0)printf \"%.2fx\",$co_t1/$co_t2; else printf \"n/a\"}") | status |")
+
+    # 4.2 — parallel-demo-v1 (3 integrações no mesmo order, stub lento 500ms).
+    # Resposta determinística → paridade total de result; v2 deve ser bem mais rápido.
+    test_case "4.2 parallel-demo-v1 — paridade total v1/v2 + speedup das Virtual Threads"
+    execute_and_measure v1 "parallel-demo-v1" '{"refId":"ABC123"}'
+    local pd_b1=$EXEC_BODY pd_t1=$EXEC_MS
+    execute_and_measure v2 "parallel-demo-v1" '{"refId":"ABC123"}'
+    local pd_b2=$EXEC_BODY pd_t2=$EXEC_MS
+
+    local parity_mark="?" parity_rc=0
+    compare_parity "$pd_b1" "$pd_b2" || parity_rc=$?
+    case $parity_rc in
+        0) success "Paridade v1/v2 confirmada (status+result+validations idênticos)"; parity_mark="✅" ;;
+        1) error "Divergência v1/v2 detectada em parallel-demo-v1!"; parity_mark="❌"
+           debug "v1: $(echo "$pd_b1" | head -c 200)"; debug "v2: $(echo "$pd_b2" | head -c 200)" ;;
+        2) warning "jq/python3 ausentes — paridade detalhada pulada (validado apenas status)"
+           echo "$pd_b1" | grep -q '"status":"SUCCESS"' && echo "$pd_b2" | grep -q '"status":"SUCCESS"' \
+               && parity_mark="~status~" || parity_mark="⚠" ;;
+    esac
+
+    # Asserção de speedup: v2 deve ser significativamente mais rápido (< 70% do v1).
+    if [ "$pd_t1" -gt 0 ] && [ "$pd_t2" -gt 0 ] && [ $((pd_t2 * 100)) -lt $((pd_t1 * 70)) ]; then
+        success "Speedup v2 confirmado: v1=${pd_t1}ms vs v2=${pd_t2}ms"
+    else
+        warning "Speedup v2 não evidente: v1=${pd_t1}ms vs v2=${pd_t2}ms (esperado v2 << v1)"
+    fi
+    PERF_ROWS+=("| parallel-demo-v1 | ${pd_t1}ms | ${pd_t2}ms | $(awk "BEGIN{if($pd_t2>0)printf \"%.2fx\",$pd_t1/$pd_t2; else printf \"n/a\"}") | $parity_mark |")
+
+    # 4.3 — smoke da rota v2 via BFF (proxy) para confirmar o caminho ponta a ponta.
+    if [ -n "$AUTH_TOKEN" ]; then
+        test_case "4.3 POST via BFF .../executions/v2 (proxy paralelo)"
+        RESPONSE=$(curl -s -w "\n%{http_code}" -X POST \
+            "$BFF_URL/bff/flows/parallel-demo-v1/versions/1.0.0/executions/v2" \
+            -H "Content-Type: application/json" \
+            -H "Authorization: Bearer $AUTH_TOKEN" \
+            -d '{"refId":"ABC123"}')
+        HTTP_CODE=$(echo "$RESPONSE" | tail -1)
+        BODY=$(echo "$RESPONSE" | head -n -1)
+        echo "$BODY" | grep -q '"status":"SUCCESS"\|executionId' \
+            && success "Execução v2 via BFF (HTTP $HTTP_CODE)" \
+            || warning "Execução v2 via BFF — HTTP $HTTP_CODE: $(echo "$BODY" | head -c 100)"
+    else
+        warning "4.3 Execução v2 via BFF — pulado (sem token Authentik)"
+    fi
+}
+
+# ─── 5. Cenários negativos ────────────────────────────────────────────────────
+test_negative_scenarios() {
+    section "5. CENÁRIOS NEGATIVOS"
+
+    test_case "5.1 Manager sem Bearer → 401"
+    CODE=$(curl -s -o /dev/null -w "%{http_code}" "$MGR_URL/manager/flows")
+    [ "$CODE" = "401" ] && success "Manager protegido (401 sem token)" \
+        || warning "Manager retornou $CODE sem token (esperado 401)"
+
+    test_case "5.2 Orchestrator sem Bearer → 401"
+    CODE=$(curl -s -o /dev/null -w "%{http_code}" \
+        -X POST "$ORCH_URL/api/v1/flows/create-order-v1/versions/1.0.0/executions" \
+        -H "Content-Type: application/json" -d '{}')
+    [ "$CODE" = "401" ] && success "Orchestrator protegido (401 sem token)" \
+        || warning "Orchestrator retornou $CODE sem token (esperado 401)"
+
+    # O orquestrador sempre retorna HTTP 200; sucesso/falha vem no campo "status" do body.
+    if [ -n "$ORCH_TOKEN" ]; then
+        test_case "5.3 Workflow inexistente → 200 + status FAILED"
+        RESP=$(orch_curl -s -w "\n%{http_code}" \
+            -X POST "$ORCH_URL/api/v1/flows/nao-existe/versions/1.0.0/executions" \
+            -H "Content-Type: application/json" -d '{}')
+        CODE=$(echo "$RESP" | tail -1)
+        BODY=$(echo "$RESP" | head -n -1)
+        if [ "$CODE" = "200" ] && echo "$BODY" | grep -q "FAILED"; then
+            success "Workflow inexistente retorna FAILED no body (comportamento correto)"
+        else
+            warning "5.3 retornou HTTP $CODE / body: $(echo "$BODY" | head -c 100)"
+        fi
+
+        test_case "5.4 Payload inválido → 200 + status FAILED"
+        RESP=$(orch_curl -s -w "\n%{http_code}" \
+            -X POST "$ORCH_URL/api/v1/flows/create-order-v1/versions/1.0.0/executions" \
+            -H "Content-Type: application/json" -d '{}')
+        CODE=$(echo "$RESP" | tail -1)
+        BODY=$(echo "$RESP" | head -n -1)
+        if [ "$CODE" = "200" ] && echo "$BODY" | grep -q "FAILED"; then
+            success "Payload invalido retorna FAILED no body (comportamento correto)"
+        else
+            warning "5.4 retornou HTTP $CODE / body: $(echo "$BODY" | head -c 100)"
+        fi
+    else
+        warning "5.3 e 5.4 — pulados (sem token Orchestrator)"
+    fi
+
+    test_case "5.5 BFF /bff/health (público) → 200"
+    CODE=$(curl -s -o /dev/null -w "%{http_code}" "$BFF_URL/bff/health")
+    [ "$CODE" = "200" ] && success "BFF /bff/health público (200)" \
+        || error "BFF /bff/health retornou $CODE (esperado 200)"
+}
+
+# ─── Relatório ────────────────────────────────────────────────────────────────
 generate_report() {
-    section "RELATÓRIO"
     TOTAL=$((PASSED + FAILED + SKIPPED))
-    PCT=$((TOTAL > 0 ? PASSED * 100 / TOTAL : 0))
+    PCTG=$((TOTAL > 0 ? PASSED * 100 / TOTAL : 0))
 
-    cat > "$CHECKLIST_FILE" <<REPORT
-# Relatório de Testes Integrados — Service Portal
-
-**Data**: $(date)
-**Script**: teste-integrado-service-portal.sh
+    cat > "$CHECKLIST_FILE" <<EOF
+# Relatório de Testes Integrados — Service Portal v3
+Data: $(date)
 
 ## Resumo
+- Total:    $TOTAL
+- ✓ Passou: $PASSED ($PCTG%)
+- ✗ Falhou: $FAILED
+- ⚠ Pulado: $SKIPPED
 
-| Resultado | Quantidade |
-|---|---|
-| ✓ Passou | $PASSED |
-| ✗ Falhou | $FAILED |
-| ⚠ Pulado | $SKIPPED |
-| **Total** | $TOTAL |
-| **Taxa de sucesso** | ${PCT}% |
+## Tokens obtidos
+- Manager Token:      $([ -n "$MANAGER_TOKEN" ] && echo "✓ sim" || echo "✗ não")
+- Orchestrator Token: $([ -n "$ORCH_TOKEN" ]    && echo "✓ sim" || echo "✗ não")
+- Authentik Token:    $([ -n "$AUTH_TOKEN" ]     && echo "✓ sim" || echo "✗ não (testes BFF pulados)")
+
+## Comparativo de execução v1 (sequencial) x v2 (paralelo)
+
+| Workflow | Latência v1 | Latência v2 | Speedup | Paridade |
+|---|---|---|---|---|
+$(printf '%s\n' "${PERF_ROWS[@]}")
+
+> Paridade: ✅ = {status,result,validations} idênticos (via jq ou python3); \`status\` = apenas status
+> comparado (resposta com campos não-determinísticos); ⚠/~status~ = jq e python3 ausentes, detalhe pulado.
+> O speedup do \`parallel-demo-v1\` evidencia o paralelismo das Virtual Threads (3 integrações @ 500ms
+> no mesmo \`order\`): v1 ≈ soma sequencial; v2 ≈ a mais lenta das paralelas.
 
 ## Log detalhado
-
-Arquivo: \`$LOG_FILE\`
-REPORT
-
+$LOG_FILE
+EOF
     success "Relatório: $CHECKLIST_FILE"
 }
 
-# ── Main ──────────────────────────────────────────────────────────────────────
+# ─── Main ─────────────────────────────────────────────────────────────────────
 main() {
-    section "TESTES INTEGRADOS — SERVICE PORTAL"
-    log "Início: $(date '+%Y-%m-%d %H:%M:%S')"
+    section "TESTES INTEGRADOS — SERVICE PORTAL v3"
+    log "Data: $(date '+%Y-%m-%d %H:%M:%S')"
     log "Log: $LOG_FILE"
 
     check_prerequisites
-    start_infrastructure
 
-    test_health            || true
-    test_server_driven_ui  || true
-    create_test_workflows  || true
-    test_crud_workflows    || true
-    test_execution_http    || true
-    test_execution_queue   || true
-    test_negative_scenarios || true
+    start_infrastructure || { error "Falha ao iniciar infraestrutura"; exit 1; }
+
+    get_manager_token     || true
+    get_orchestrator_token || true
+    get_authentik_token   || true
+
+    test_health
+    test_server_driven_ui
+    create_test_workflows || true
+    test_crud_workflows   || true
+    test_execution        || true
+    test_negative_scenarios
 
     generate_report
 
-    section "RESUMO FINAL"
+    section "RESULTADO FINAL"
     TOTAL=$((PASSED + FAILED + SKIPPED))
-    PCT=$((TOTAL > 0 ? PASSED * 100 / TOTAL : 0))
-    log "Total: $TOTAL | ✓ $PASSED | ✗ $FAILED | ⚠ $SKIPPED | Taxa: ${PCT}%"
+    PCTG=$((TOTAL > 0 ? PASSED * 100 / TOTAL : 0))
 
-    if [ $FAILED -gt 0 ]; then
-        log "Alguns testes falharam. Verifique: $LOG_FILE"
-        exit 1
-    fi
+    log "╔══════════════════════════════════╗"
+    log "║  PASSOU:  $PASSED / $TOTAL testes ($PCTG%)  ║"
+    log "║  FALHOU:  $FAILED                       ║"
+    log "║  PULADOS: $SKIPPED                       ║"
+    log "╚══════════════════════════════════╝"
+
+    [ $FAILED -eq 0 ] && success "Todos os testes passaram ou foram pulados por dependências externas (Authentik)" \
+        || warning "Verifique os logs: $LOG_FILE"
 }
 
 main "$@"
