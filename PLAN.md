@@ -191,6 +191,7 @@ Manager (Kotlin, :8082) — dono da collection `workflows` (após migração fas
   - Imagem Docker `generic-orchestrator` construída com sucesso
 
 ### ⬜ Pendente
+- **Melhoria de logs**: agrupamento por execução de flow (MDC/Tracing) — item #9
 
 (nenhum item pendente neste componente)
 
@@ -356,6 +357,42 @@ Para evitar trafegar dezenas/centenas de KB por fluxo em listagens (cliente norm
 - Resposta: `List<FlowSummaryDto>` sem `yamlContent` (leve)
 - Implementado em repository (`findAllByFlowId`, `findAllByFlowIdAndActive`) + `FlowDocumentService.listVersions()` + `FlowController.listVersions()`
 - **76 testes, 0 falhas**, cobertura ≥ 95%
+
+### ⬜ Pendência: Atualizar testes integrados para cobrir fluxos v1 e v2
+Garantir paridade funcional e mensurar speedup entre v1 (sequencial) e v2 (paralelo). Ver PLAN-integrated-tests-v1-v2.md.
+
+### ⬜ Pendência: Teste de performance Orquestrador (v1 vs v2)
+Validar escalabilidade das Virtual Threads sob carga usando k6. Ver PLAN-performance-test-k6.md.
+
+### ⬜ Pendência: Melhoria de logs: agrupamento por execução de flow (MDC/Tracing)
+Implementar rastreabilidade completa nas execuções para facilitar o troubleshooting.
+
+**Itens:**
+- Configurar um `OncePerRequestFilter` no Orquestrador para capturar ou gerar um `executionId`.
+- Utilizar SLF4J MDC para injetar `executionId`, `flowId` e `version` nos logs.
+- Implementar um `ContextPropagatingTaskDecorator` para garantir que o MDC seja copiado para as Virtual Threads (v2).
+- Propagar o `executionId` nos headers (`X-Execution-Id`) das chamadas HTTP via WebClient.
+- Atualizar o pattern de log no `logback-spring.xml` para exibir o contexto.
+
+### ⬜ Pendência: Atualizar testes integrados para cobrir fluxos v1 e v2
+
+Garantir que a suite de testes integrados (`teste-integrado-service-portal-v3.sh`) valide as duas rotas de execução de forma sistemática.
+
+**Itens:**
+- Atualizar o script para executar cada workflow de teste nos dois endpoints: `/executions` (v1) e `/executions/v2` (v2).
+- Validar que o `status` e o conteúdo do mapa `result` e `validations` são idênticos em ambos os casos.
+- Adicionar asserção de tempo: para fluxos com múltiplas integrações HTTP (WireMock com delay), o endpoint v2 deve apresentar um tempo total de execução significativamente menor que o v1.
+- Refatorar o checklist de saída para separar os resultados de v1 e v2.
+
+### ⬜ Pendência: Teste de performance Orquestrador (v1 vs v2)
+
+Explorar e implementar uma suite de testes de carga para quantificar o benefício das Virtual Threads no `generic-orchestrator`.
+
+**Itens:**
+- Escolha de ferramenta: Avaliar **k6** (JavaScript/Go) ou **JMeter** para simular múltiplos usuários concorrentes chamando workflows complexos.
+- Cenário de teste: Criar um workflow com 5 a 10 integrações HTTP apontando para o WireMock, configurando um delay fixo (ex: 500ms) em cada stub.
+- Métricas: Comparar Throughput (req/s), Latência (P95, P99) e consumo de CPU/Memória entre v1 (sequencial) e v2 (paralelo).
+- Documentar os limites de escalabilidade: identificar o ponto de saturação onde o paralelismo deixa de ser eficiente (ex: limites de conexões do WebClient/Netty).
 
 ### ⬜ Pendente
 
@@ -575,7 +612,9 @@ Autorização por endpoint conforme tabela de acesso de cada collection (seção
 | ~~**S2**~~ | ~~2~~ | ~~Mover `mongodb-workflows/` para o Manager + renomear database~~ ✅ | 🟡 Médio |
 | ~~**S2**~~ | ~~5~~ | ~~Dados de exemplo no `init-mongo.js` *(depende do #2)*~~ ✅ | 🟡 Médio |
 | ~~**S3**~~ | ~~6~~ | ~~Invalidação de cache cross-service (endpoint admin no orquestrador)~~ ✅ | 🟠 Médio+ |
-| **S4+** | 4 | Telas de contratos, integrações e validações (BFF + Frontend) | 🔴 Grande |
+| ~~**S4+**~~ | ~~4~~ | ~~Telas de contratos, integrações e validações (BFF + Frontend)~~ ✅ | 🔴 Grande |
+| **S5** | 7 | Atualizar testes integrados para cobrir fluxos v1 e v2 | 🟡 Médio |
+| **S6** | 8 | Teste de performance Orquestrador (v1 vs v2) | 🟠 Médio+ |
 
 ---
 
@@ -655,9 +694,28 @@ A regra de acesso para `validations` foi corrigida — RULES (bizop) tem **CRUD 
 
 ---
 
-### ⬜ Feature: telas de gerenciamento de contratos, integrações e validações (Frontend + BFF)
+### ✅ Feature: telas de gerenciamento de contratos, integrações e validações (Frontend + BFF)
 
 > 📄 **Plano detalhado:** [docs/plans/PLAN-management-screens.md](docs/plans/PLAN-management-screens.md)
+
+Concluído (S4).
+
+**BFF:**
+- `ManagerClient`: 18 métodos novos (6 por recurso) via helpers genéricos `listResource/getResource/listResourceVersions/createResource/updateResource/deleteResource` (bodies JSON; `version` inteiro)
+- 3 proxy controllers (`IntegrationProxyController`, `ContractProxyController`, `ValidationProxyController`) com `@PreAuthorize` por verbo: integrations (R: ADMIN/WORKFLOWS, W: ADMIN), contracts (R: ADMIN/WORKFLOWS/RULES, W: ADMIN/WORKFLOWS), validations (R/W: ADMIN/RULES)
+- `BffMenuController`: +3 itens (`integration-manager`, `contract-manager`, `validation-manager`) com `requiredGroups` corretos + 3 cases de `uiSchema`
+- Cobertura JaCoCo expandida (3 controllers + `BffMenuController`); testes: 3 controller tests, `ManagerClientTest` (CRUD dos 3 recursos), `BffMenuControllerTest` atualizado, `SecurityConfigIT` (+casos de 200/403 por grupo). Gate ≥ 95% OK
+
+**Frontend:**
+- `types/index.ts`: `IntegrationDefinition`, `ValidationDefinition`, `ContractDefinition`+`ContractField`+`FieldValidation`, `ResourcePage<T>`
+- `bff.ts`: fábrica genérica `resourceApi<T>` + namespaces `bff.integrations/contracts/validations`
+- Componente genérico `ResourceManager` (list/create JSON/detail/versions/soft-delete) + 3 wrappers finos (`IntegrationManager`, `ContractManager`, `ValidationManager`) com `canWrite` derivado do grupo do JWT; registrados no `ComponentRenderer`
+- Testes `bff.test.ts` (+9, total 80); cobertura `bff.ts` 100%; `tsc` e `vite build` OK
+
+**Validação e2e (stack rebuildada, tokens reais Authentik):**
+- Menu por grupo: it(ADMIN)→4 itens; bizop(RULES)→contract+validation; workop(WORKFLOWS)→flow+integration+contract ✅
+- 403: GET integrations RULES→403, POST integrations WORKFLOWS→403, GET validations WORKFLOWS→403; GET contracts RULES→200 ✅
+- CRUD real: it cria integração via `POST /bff/integrations` → 201 e aparece na lista de ativos ✅
 
 Criar as novas telas no frontend para gerenciar as collections `contracts`, `integrations` e `validations`, seguindo o mesmo padrão Server Driven UI já existente no `FlowManager`.
 
