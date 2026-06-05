@@ -113,7 +113,7 @@ Manager (Kotlin, :8082) — dono da collection `workflows` (após migração fas
 | **Modularização de workflows: collections integrations, contracts, validations** | Manager | ✅ Feito | 3 novas collections MongoDB; CRUD APIs `/manager/integrations`, `/manager/contracts`, `/manager/validations`; `ResourceRef` + campos `contract/integrationRefs/validationRefs` no `FlowDocument`; `SequentialVersioningService` (1→2→3); `init-mongo.js` atualizado; 150 testes, 0 falhas |
 | **Execução da seção `validations` no pipeline do orquestrador** | Orquestrador | ✅ Feito | Fase validações após integrações em v1 e v2; reutiliza `IntegrationDefinition`; `FlowExecutionContext.validations` separado de `integrations`; `executePhase()` + `runStep(BiConsumer)` no v2; resposta inclui `result` (integrações) e `validations` (validações) como mapas separados; 87 testes, 0 falhas, gate JaCoCo ≥ 95% |
 | **Invalidação de cache cross-service (S3)** | Orquestrador + Manager | ✅ Feito | `CacheAdminController` (`DELETE /api/admin/cache/workflows[/{flowId}/versions/{version}]`) no orquestrador; Manager invalida via `RestClient` (`OrchestratorCacheClient` + `OrchestratorAuthService`) após `update()`/`deactivate()`; falha tolerante (warning, não propaga); validado e2e (chave Redis removida) + tolerância a falha; testes nos dois lados, gates JaCoCo ≥ 95% |
-| **Melhoria de logs: agrupamento por execução de flow (MDC/Tracing)** | Orquestrador | ⬜ Pendente | Implementar rastreabilidade para Virtual Threads e propagação de context |
+| **Melhoria de logs: agrupamento por execução de flow (MDC/Tracing)** | Orquestrador | ✅ CONCLUÍDO (S8) | `ExecutionMdcFilter` (OncePerRequestFilter): captura/gera `executionId` via `X-Execution-Id`; MDC com `executionId`+`flowId`+`version`; propagação manual para Virtual Threads (v2); `X-Execution-Id` nos headers WebClient; `logback-spring.xml` com padrão MDC; 95 testes, 0 falhas |
 
 ---
 
@@ -194,7 +194,6 @@ Manager (Kotlin, :8082) — dono da collection `workflows` (após migração fas
   - Imagem Docker `generic-orchestrator` construída com sucesso
 
 ### ⬜ Pendente
-- **Melhoria de logs**: agrupamento por execução de flow (MDC/Tracing) — item #9
 
 (nenhum item pendente neste componente)
 
@@ -367,15 +366,14 @@ Concluída. Paridade funcional confirmada e speedup mensurado entre v1 (sequenci
 ### ✅ Pendência: Teste de performance Orquestrador (v1 vs v2)
 Implementado (S6). Ver PLAN-performance-test-k6.md e docs/performance/RESULTS-v1-vs-v2.md.
 
-### ⬜ Pendência: Melhoria de logs: agrupamento por execução de flow (MDC/Tracing)
-Implementar rastreabilidade completa nas execuções para facilitar o troubleshooting.
+### ✅ Pendência: Melhoria de logs: agrupamento por execução de flow (MDC/Tracing) — CONCLUÍDA (S8)
 
-**Itens:**
-- Configurar um `OncePerRequestFilter` no Orquestrador para capturar ou gerar um `executionId`.
-- Utilizar SLF4J MDC para injetar `executionId`, `flowId` e `version` nos logs.
-- Implementar um `ContextPropagatingTaskDecorator` para garantir que o MDC seja copiado para as Virtual Threads (v2).
-- Propagar o `executionId` nos headers (`X-Execution-Id`) das chamadas HTTP via WebClient.
-- Atualizar o pattern de log no `logback-spring.xml` para exibir o contexto.
+**O que foi feito:**
+- **`ExecutionMdcFilter`** — `OncePerRequestFilter` captura `X-Execution-Id` da requisição (ou gera UUID); injeta `executionId` no MDC; ecoa o header na resposta; `MDC.clear()` no finally.
+- **`OrchestrationService` / `OrchestrationV2Service`** — leem `executionId` do MDC (preenchido pelo filtro) e enriquecem com `flowId` e `version` antes de iniciar a execução.
+- **Propagação para Virtual Threads (v2)** — `MDC.getCopyOfContextMap()` capturado antes do submit; `MDC.setContextMap()` no início de cada virtual thread + `MDC.clear()` no finally.
+- **`HttpIntegrationExecutor`** — propaga `X-Execution-Id` (lido do MDC) como header em todas as chamadas WebClient downstream.
+- **`logback-spring.xml`** — padrão: `[executionId] [flowId] [version] LEVEL [thread] logger - msg`.
 
 ### ✅ Pendência: Atualizar testes integrados para cobrir fluxos v1 e v2 (S5) — CONCLUÍDA
 
@@ -469,7 +467,22 @@ docker compose -f docker-compose-service-portal.yml up -d
 
 ---
 
-## Sessão mais recente — CONCLUÍDA ✅ (S7)
+## Sessão mais recente — CONCLUÍDA ✅ (S8)
+
+> MDC/Tracing nos logs do orquestrador: rastreabilidade end-to-end por execução (executionId, flowId, version) com propagação para Virtual Threads.
+
+### O que foi feito
+
+- **`filter/ExecutionMdcFilter.java`** — `OncePerRequestFilter` (ordem default do servlet container): lê `X-Execution-Id` do request header ou gera UUID; injeta `executionId` no MDC; ecoa o valor no response header; `MDC.clear()` no finally, mesmo em caso de exceção na chain
+- **`OrchestrationService` / `OrchestrationV2Service`** — `MDC.get("executionId")` reutiliza o valor do filtro (fallback para novo UUID se chamado fora de um contexto HTTP, e.g., testes); `MDC.put("flowId", ...)` e `MDC.put("version", ...)` enriquecem o contexto antes da execução
+- **Propagação MDC → Virtual Threads (v2)** — `MDC.getCopyOfContextMap()` capturado no thread do request antes de `executeGroupParallel()`; cada virtual thread inicia com `MDC.setContextMap(snapshot)` e limpa com `MDC.clear()` no finally — garante rastreabilidade paralela sem vazamento entre threads
+- **`HttpIntegrationExecutor`** — propaga `X-Execution-Id: <executionId>` em todas as chamadas WebClient (lido do MDC corrente, funciona em threads normais e virtuais)
+- **`logback-spring.xml`** — padrão: `yyyy-MM-dd HH:mm:ss.SSS [executionId] [flowId] [version] LEVEL [thread] logger - msg`; substitui configuração `logging.level` do `application.yml` (que continua como fallback)
+- **95 testes, 0 falhas** (eram 87) — 6 novos testes em `ExecutionMdcFilterTest`
+
+---
+
+## Sessão anterior — CONCLUÍDA ✅ (S7)
 
 > Governança: Spotless + cabeçalhos de licença MIT em todos os `.java` e `.kt`.
 
