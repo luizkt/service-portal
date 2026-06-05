@@ -1,0 +1,19 @@
+{
+  "mappings": [
+    {
+      "name": "BFF S2S auth — POST /api/auth/tokens (Orchestrator e Manager)",
+      "request": {
+        "method": "POST",
+        "url": "/api/auth/tokens"
+      },
+      "response": {
+        "status": 200,
+        "headers": { "Content-Type": "application/json" },
+        "jsonBody": {
+          "token": "dev-fake-s2s-token",
+          "type": "Bearer"
+        }
+      }
+    }
+  ]
+}

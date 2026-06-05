@@ -1,0 +1,8 @@
+generic-orchestrator/
+service-portal-bff/
+service-portal-frontend/
+service-portal-manager/
+
+*.log
+
+teste-integrado-checklist-*.md

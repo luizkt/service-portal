@@ -1,0 +1,105 @@
+{
+  "mappings": [
+    {
+      "name": "Manager — GET /manager/flows (lista paginada)",
+      "request": {
+        "method": "GET",
+        "urlPathPattern": "/manager/flows"
+      },
+      "response": {
+        "status": 200,
+        "headers": { "Content-Type": "application/json" },
+        "jsonBody": {
+          "content": [
+            {
+              "flowId": "demo-flow",
+              "version": "1.0",
+              "name": "Demo Flow",
+              "status": "active",
+              "description": "Fluxo de demonstração gerado pelo WireMock"
+            }
+          ],
+          "totalElements": 1,
+          "totalPages": 1,
+          "number": 0,
+          "size": 20
+        }
+      }
+    },
+    {
+      "name": "Manager — GET /manager/flows/{flowId}/versions/{version}",
+      "request": {
+        "method": "GET",
+        "urlPathPattern": "/manager/flows/[^/]+/versions/[^/]+"
+      },
+      "response": {
+        "status": 200,
+        "headers": { "Content-Type": "application/json" },
+        "jsonBody": {
+          "flowId": "demo-flow",
+          "version": "1.0",
+          "name": "Demo Flow",
+          "status": "active",
+          "description": "Fluxo de demonstração",
+          "yamlContent": "id: demo-flow\nversion: \"1.0\"\nsteps: []\n"
+        }
+      }
+    },
+    {
+      "name": "Manager — GET /manager/flows/{flowId}/versions/{version}/yaml",
+      "request": {
+        "method": "GET",
+        "urlPathPattern": "/manager/flows/[^/]+/versions/[^/]+/yaml"
+      },
+      "response": {
+        "status": 200,
+        "headers": { "Content-Type": "text/yaml" },
+        "body": "id: demo-flow\nversion: \"1.0\"\nsteps: []\n"
+      }
+    },
+    {
+      "name": "Manager — POST /manager/flows (criar fluxo)",
+      "request": {
+        "method": "POST",
+        "url": "/manager/flows"
+      },
+      "response": {
+        "status": 201,
+        "headers": { "Content-Type": "application/json" },
+        "jsonBody": {
+          "flowId": "new-flow",
+          "version": "1.0",
+          "name": "New Flow",
+          "status": "active"
+        }
+      }
+    },
+    {
+      "name": "Manager — PUT /manager/flows/{flowId}/versions/{version} (atualizar fluxo)",
+      "request": {
+        "method": "PUT",
+        "urlPathPattern": "/manager/flows/[^/]+/versions/[^/]+"
+      },
+      "response": {
+        "status": 200,
+        "headers": { "Content-Type": "application/json" },
+        "jsonBody": {
+          "flowId": "demo-flow",
+          "version": "1.0",
+          "name": "Demo Flow (atualizado)",
+          "status": "active"
+        }
+      }
+    },
+    {
+      "name": "Manager — DELETE /manager/flows/{flowId}/versions/{version}",
+      "request": {
+        "method": "DELETE",
+        "urlPathPattern": "/manager/flows/[^/]+/versions/[^/]+"
+      },
+      "response": {
+        "status": 204
+      }
+    }
+  ]
+}

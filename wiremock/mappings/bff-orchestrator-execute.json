@@ -1,0 +1,22 @@
+{
+  "mappings": [
+    {
+      "name": "Orchestrator — POST /api/flows/{flowId}/versions/{version}/executions",
+      "request": {
+        "method": "POST",
+        "urlPathPattern": "/api/flows/[^/]+/versions/[^/]+/executions"
+      },
+      "response": {
+        "status": 200,
+        "headers": { "Content-Type": "application/json" },
+        "jsonBody": {
+          "executionId": "exec-wiremock-001",
+          "status": "COMPLETED",
+          "result": {
+            "message": "Execução simulada pelo WireMock"
+          }
+        }
+      }
+    }
+  ]
+}

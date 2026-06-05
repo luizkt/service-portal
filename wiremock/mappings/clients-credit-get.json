@@ -1,0 +1,19 @@
+{
+    "request": {
+        "method": "GET",
+        "urlPathPattern": "/clients/([A-Z0-9]{6,20})/credit"
+    },
+    "response": {
+        "status": 200,
+        "headers": {
+            "Content-Type": "application/json"
+        },
+        "jsonBody": {
+            "clientId": "{{request.pathSegments.[1]}}",
+            "creditLimit": 5000.00,
+            "available": 3200.00,
+            "currency": "BRL"
+        },
+        "transformers": ["response-template"]
+    }
+}
