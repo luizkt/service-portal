@@ -99,7 +99,8 @@ Manager (Kotlin, :8082) — dono da collection `workflows` (após migração fas
 | **Fix Crítico: Healthcheck dos Containers** | Infra | ✅ CONCLUÍDO | docs/diagnostics/DIAGNOSTICO-HEALTHCHECK-CURL.md; Dockerfiles + apk curl |
 | **Diagnóstico dos Testes Integrados (v1)** | Raiz | ✅ CONCLUÍDO | docs/diagnostics/DIAGNOSTICO-TESTES-INTEGRADOS.md; script v2 criado |
 | Criação de arquivo AGENTS.md para cada aplicação | Todos | ✅ Feito | generic-orchestrator, bff, manager, frontend |
-| **Governança: Definição de Licenciamento** | Raiz | ✅ CONCLUÍDO | Licença MIT adicionada à raiz |
+| **Governança: Definição de Licenciamento** | Todos | ✅ CONCLUÍDO | Licença MIT adicionada à raiz e em todos os módulos individuais |
+| **Governança: Cabeçalhos de Licença nos Fontes + Spotless** | Todos | ✅ CONCLUÍDO (S7) | `license-header.txt` + Spotless 6.25.0 nos 3 módulos; 116 Java + 51 Kotlin com header MIT; googleJavaFormat (AOSP) + ktlint; `spotlessCheck` valida em todo build |
 | **Corrigir testes integrados** | Raiz + BFF | ✅ Feito | Script v3 criado; 32/33 (96%) passando, 0 falhas; 1 skipped = aviso jq ausente |
 | **Authentik automático no docker-compose** | Raiz + BFF | ✅ Feito | Blueprint `/authentik/blueprints/service-portal.yaml`; bootstrap vars; BFF multi-issuer JWT; global token endpoint; script v3 integrado com `.env` sourcing |
 | **Grupos de acesso + autorização por grupo** | Authentik + BFF | ✅ Feito | Blueprint: grupos ADMIN/RULES/WORKFLOWS + usuários it/bizop/workop; scope mapping `groups` claim no JWT; `@EnableMethodSecurity` + `JwtAuthenticationConverter`; `@PreAuthorize` em FlowProxyController; 40 testes passando |
@@ -112,6 +113,7 @@ Manager (Kotlin, :8082) — dono da collection `workflows` (após migração fas
 | **Modularização de workflows: collections integrations, contracts, validations** | Manager | ✅ Feito | 3 novas collections MongoDB; CRUD APIs `/manager/integrations`, `/manager/contracts`, `/manager/validations`; `ResourceRef` + campos `contract/integrationRefs/validationRefs` no `FlowDocument`; `SequentialVersioningService` (1→2→3); `init-mongo.js` atualizado; 150 testes, 0 falhas |
 | **Execução da seção `validations` no pipeline do orquestrador** | Orquestrador | ✅ Feito | Fase validações após integrações em v1 e v2; reutiliza `IntegrationDefinition`; `FlowExecutionContext.validations` separado de `integrations`; `executePhase()` + `runStep(BiConsumer)` no v2; resposta inclui `result` (integrações) e `validations` (validações) como mapas separados; 87 testes, 0 falhas, gate JaCoCo ≥ 95% |
 | **Invalidação de cache cross-service (S3)** | Orquestrador + Manager | ✅ Feito | `CacheAdminController` (`DELETE /api/admin/cache/workflows[/{flowId}/versions/{version}]`) no orquestrador; Manager invalida via `RestClient` (`OrchestratorCacheClient` + `OrchestratorAuthService`) após `update()`/`deactivate()`; falha tolerante (warning, não propaga); validado e2e (chave Redis removida) + tolerância a falha; testes nos dois lados, gates JaCoCo ≥ 95% |
+| **Melhoria de logs: agrupamento por execução de flow (MDC/Tracing)** | Orquestrador | ⬜ Pendente | Implementar rastreabilidade para Virtual Threads e propagação de context |
 
 ---
 
@@ -362,8 +364,8 @@ Para evitar trafegar dezenas/centenas de KB por fluxo em listagens (cliente norm
 ### ✅ Pendência: Atualizar testes integrados para cobrir fluxos v1 e v2 (S5)
 Concluída. Paridade funcional confirmada e speedup mensurado entre v1 (sequencial) e v2 (paralelo). Ver PLAN-integrated-tests-v1-v2.md e o detalhe abaixo.
 
-### ⬜ Pendência: Teste de performance Orquestrador (v1 vs v2)
-Validar escalabilidade das Virtual Threads sob carga usando k6. Ver PLAN-performance-test-k6.md.
+### ✅ Pendência: Teste de performance Orquestrador (v1 vs v2)
+Implementado (S6). Ver PLAN-performance-test-k6.md e docs/performance/RESULTS-v1-vs-v2.md.
 
 ### ⬜ Pendência: Melhoria de logs: agrupamento por execução de flow (MDC/Tracing)
 Implementar rastreabilidade completa nas execuções para facilitar o troubleshooting.
@@ -394,15 +396,25 @@ O `teste-integrado-service-portal-v3.sh` agora valida as duas rotas de execuçã
 - `parallel-demo-v1`: v1 ≈ 1576ms, v2 ≈ 561ms (**speedup ~2.8x**), **paridade total ✅** (status+result+validations idênticos)
 - 30/34 testes, **0 falhas**; 4 pulados (token M2M Authentik ausente no ambiente → smokes BFF autenticados)
 
-### ⬜ Pendência: Teste de performance Orquestrador (v1 vs v2)
+### ✅ Pendência: Teste de performance Orquestrador (v1 vs v2) — CONCLUÍDA (S6)
 
-Explorar e implementar uma suite de testes de carga para quantificar o benefício das Virtual Threads no `generic-orchestrator`.
+> 📄 **Plano detalhado:** [docs/plans/PLAN-performance-test-k6.md](docs/plans/PLAN-performance-test-k6.md)
+> 📊 **Resultados:** [docs/performance/RESULTS-v1-vs-v2.md](docs/performance/RESULTS-v1-vs-v2.md)
 
-**Itens:**
-- Escolha de ferramenta: Avaliar **k6** (JavaScript/Go) ou **JMeter** para simular múltiplos usuários concorrentes chamando workflows complexos.
-- Cenário de teste: Criar um workflow com 5 a 10 integrações HTTP apontando para o WireMock, configurando um delay fixo (ex: 500ms) em cada stub.
-- Métricas: Comparar Throughput (req/s), Latência (P95, P99) e consumo de CPU/Memória entre v1 (sequencial) e v2 (paralelo).
-- Documentar os limites de escalabilidade: identificar o ponto de saturação onde o paralelismo deixa de ser eficiente (ex: limites de conexões do WebClient/Netty).
+**O que foi feito:**
+- **`perf-test-flow`** adicionado ao `service-portal-manager/mongodb-manager/init-mongo.js` — 6 integrações HTTP no mesmo `order: 1` apontando para o stub lento `/slow/P1..P6` do WireMock (500ms cada); disponível automaticamente no `docker compose up`
+- **`tests/performance/orchestrator-test.js`** (k6) — `setup()` autentica uma única vez contra o orquestrador; parâmetros via env vars (`API_VERSION`, `VUS`, `DURATION`, `FLOW_ID`); 3 checks por iteração (HTTP 200, status SUCCESS, não-5xx)
+- **`tests/performance/setup-perf-flow.sh`** — cria o workflow no Manager via API (idempotente: 409 = ok) + flush do Redis para evitar cache stale
+- **`tests/performance/run-perf-test.sh`** — runner completo: setup → baseline (1VU/30s) → load (20VUs/2min) → stress (50VUs/3min) para v1 e v2; extrai métricas dos logs k6; gera `docs/performance/RESULTS-v1-vs-v2.md` automaticamente
+- Todos os scripts via Docker (`grafana/k6`) na rede `service-portal_portal`; nenhuma instalação local necessária
+
+**Expectativa:** speedup ~6× em baseline (v1 ~3000ms vs v2 ~500ms para 6 steps × 500ms); ponto de saturação identificado no cenário stress.
+
+**Como executar:**
+```bash
+docker compose -f docker-compose-service-portal.yml up -d
+./tests/performance/run-perf-test.sh
+```
 
 ### ⬜ Pendente
 
@@ -426,6 +438,11 @@ Explorar e implementar uma suite de testes de carga para quantificar o benefíci
 - Vitest + jsdom + @testing-library/react configurados; gate de cobertura ≥ 95% no `vite.config.ts` (lines/functions/branches/statements). 41 testes em 4 arquivos — cobertura **100%** dos módulos `src/auth/**` e `src/api/**`
 
 ### ⬜ Pendente
+
+#### ~~Governança: Spotless~~ ✅ CONCLUÍDO (S7)
+- ~~Implementar `PLAN-spotless-setup.md` em todos os módulos Java/Kotlin.~~
+- ~~Substituir o uso do script `apply-license-header.sh` pelo comando `spotlessApply`.~~
+- ~~Validar se arquivos gerados (se houver) estão sendo ignorados.~~
 
 #### Monitoramento Avançado: Spring Boot Admin (SBA)
 - Criar serviço `spring-boot-admin` no Docker Compose.
@@ -452,7 +469,42 @@ Explorar e implementar uma suite de testes de carga para quantificar o benefíci
 
 ---
 
-## Sessão mais recente — CONCLUÍDA ✅
+## Sessão mais recente — CONCLUÍDA ✅ (S7)
+
+> Governança: Spotless + cabeçalhos de licença MIT em todos os `.java` e `.kt`.
+
+### O que foi feito
+
+- **`license-header.txt`** criado na raiz do repositório com o texto completo da licença MIT em formato block comment `/* ... */`
+- **Spotless 6.25.0** configurado nos 3 módulos via `build.gradle.kts`:
+  - `generic-orchestrator` e `service-portal-bff`: `java { licenseHeaderFile + googleJavaFormat().aosp() }`
+  - `service-portal-manager`: `kotlin { licenseHeaderFile + ktlint() }`
+- **`spotlessApply`** aplicado: 116 arquivos Java (MIT header + AOSP formatting) + 51 arquivos Kotlin (MIT header + ktlint formatting)
+- **`apply-license-header.sh`** removido (estava vazio — substituído pelo Spotless)
+- **Builds verificados**: todos os 3 módulos `BUILD SUCCESSFUL` com os mesmos testes passando
+- **`spotlessCheck`** integrado ao `check` do Gradle — detecta automaticamente headers ausentes ou arquivos fora do padrão em qualquer build futuro
+
+**Nota técnica:** ao configurar Spotless com `licenseHeaderFile + ktlint` em arquivos sem headers, o ktlint interferia no dirty-detection do Spotless. Solução: aplicar `licenseHeaderFile` sem `ktlint` primeiro (para adicionar os headers), depois reintroduzir `ktlint` (para validar formatting). Ambos coexistem normalmente em seguida.
+
+---
+
+## Sessão anterior — CONCLUÍDA ✅ (S6)
+
+> Teste de performance Orquestrador v1 vs v2: suite k6 com 3 cenários (baseline/load/stress), workflow `perf-test-flow` com 6 integrações paralelas, runner script e template de resultados.
+
+### O que foi feito
+
+- **`init-mongo.js`** — `perf-test-flow` adicionado: 6 HTTP no mesmo `order: 1` → stub WireMock `/slow/P1..P6` (500ms fixo)
+- **`tests/performance/orchestrator-test.js`** — script k6 parametrizável (`API_VERSION`, `VUS`, `DURATION`)
+- **`tests/performance/setup-perf-flow.sh`** — cria o workflow no Manager via API + flush Redis
+- **`tests/performance/run-perf-test.sh`** — runner completo: 3 cenários × 2 versões → gera `docs/performance/RESULTS-v1-vs-v2.md`
+- **`docs/performance/RESULTS-v1-vs-v2.md`** — template com instruções; sobrescrito pelo runner com métricas reais
+
+**Execução:** `./tests/performance/run-perf-test.sh` (requer stack up + Docker)
+
+---
+
+## Sessão anterior — CONCLUÍDA ✅
 
 > Modularização da configuração de workflows: collections `integrations`, `contracts` e `validations` no Manager + referências na collection `workflows`.
 
@@ -645,7 +697,8 @@ Autorização por endpoint conforme tabela de acesso de cada collection (seção
 | ~~**S3**~~ | ~~6~~ | ~~Invalidação de cache cross-service (endpoint admin no orquestrador)~~ ✅ | 🟠 Médio+ |
 | ~~**S4+**~~ | ~~4~~ | ~~Telas de contratos, integrações e validações (BFF + Frontend)~~ ✅ | 🔴 Grande |
 | ~~**S5**~~ | ~~7~~ | ~~Atualizar testes integrados para cobrir fluxos v1 e v2~~ ✅ | 🟡 Médio |
-| **S6** | 8 | Teste de performance Orquestrador (v1 vs v2) | 🟠 Médio+ |
+| ~~**S6**~~ | ~~8~~ | ~~Teste de performance Orquestrador (v1 vs v2)~~ ✅ | 🟠 Médio+ |
+| ~~**S7**~~ | ~~A+B~~ | ~~Spotless + cabeçalhos de licença MIT nos fontes~~ ✅ | 🟡 Médio |
 
 ---
 
