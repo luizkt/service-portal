@@ -298,10 +298,15 @@ services:
       ORCHESTRATOR_URL:         http://orchestrator:8080
       ORCHESTRATOR_ADMIN_USERNAME: ${ORCHESTRATOR_ADMIN_USERNAME:-admin}
       ORCHESTRATOR_ADMIN_PASSWORD: ${ORCHESTRATOR_ADMIN_PASSWORD:-admin}
+      SPRING_BOOT_ADMIN_URL:       http://spring-boot-admin:8080
+      SBA_USERNAME:                ${SBA_USERNAME:-admin}
+      SBA_PASSWORD:                ${SBA_PASSWORD:-admin}
     ports:
       - "${MANAGER_PORT:-8082}:${MANAGER_INTERNAL_PORT:-8082}"
     depends_on:
       mongodb:
+        condition: service_healthy
+      spring-boot-admin:
         condition: service_healthy
     networks:
       - portal
@@ -429,6 +434,9 @@ services:
       AWS_SQS_ENDPOINT:             ${AWS_SQS_ENDPOINT:-http://localstack:4566}
       AWS_ACCESS_KEY_ID:            ${AWS_ACCESS_KEY_ID:-test}
       AWS_SECRET_ACCESS_KEY:        ${AWS_SECRET_ACCESS_KEY:-test}
+      SPRING_BOOT_ADMIN_URL:        http://spring-boot-admin:8080
+      SBA_USERNAME:                 ${SBA_USERNAME:-admin}
+      SBA_PASSWORD:                 ${SBA_PASSWORD:-admin}
     ports:
       - "${ORCHESTRATOR_PORT:-8080}:${ORCHESTRATOR_INTERNAL_PORT:-8080}"
     depends_on:
@@ -445,6 +453,8 @@ services:
       manager:
         condition: service_healthy
       localstack:
+        condition: service_healthy
+      spring-boot-admin:
         condition: service_healthy
     networks:
       - portal
@@ -488,6 +498,9 @@ services:
       AUTHENTIK_M2M_ISSUER_URI:   http://localhost:${AUTHENTIK_PORT_HTTP:-9000}/application/o/${AUTHENTIK_M2M_APP_SLUG:-service-portal-m2m}/
       # CLIENT_ID: client público SPA cadastrado no Authentik
       AUTHENTIK_CLIENT_ID:        ${AUTHENTIK_CLIENT_ID:-service-portal-spa}
+      SPRING_BOOT_ADMIN_URL:      http://spring-boot-admin:8080
+      SBA_USERNAME:               ${SBA_USERNAME:-admin}
+      SBA_PASSWORD:               ${SBA_PASSWORD:-admin}
     ports:
       - "${BFF_PORT:-8081}:${BFF_INTERNAL_PORT:-8081}"
     depends_on:
@@ -496,6 +509,8 @@ services:
       orchestrator:
         condition: service_healthy
       manager:
+        condition: service_healthy
+      spring-boot-admin:
         condition: service_healthy
     networks:
       - portal
@@ -586,19 +601,30 @@ services:
 
   # ---------------------------------------------------------------------------
   # Spring Boot Admin — Gerenciamento visual das aplicações Spring
+  # UI: http://localhost:8085  |  login: admin / admin
+  # Thread Dump e Heap Dump disponíveis via /actuator/threaddump e /actuator/heapdump
   # ---------------------------------------------------------------------------
-  # spring-boot-admin:
-  #   build:
-  #     context: ./service-portal-admin
-  #     dockerfile: Dockerfile
-  #   container_name: portal-sba
-  #   ports:
-  #     - "8085:8080"
-  #   environment:
-  #     SPRING_BOOT_ADMIN_UI_TITLE: "Service Portal Admin"
-  #     SPRING_PROFILES_ACTIVE: "docker"
-  #   networks:
-  #     - portal
+  spring-boot-admin:
+    build:
+      context: ./service-portal-admin
+      dockerfile: Dockerfile
+    container_name: portal-sba
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8080/actuator/health || exit 1"]
+      start_period: 30s
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    environment:
+      SERVER_PORT:          8080
+      SPRING_PROFILES_ACTIVE: ""
+      SBA_USERNAME:         ${SBA_USERNAME:-admin}
+      SBA_PASSWORD:         ${SBA_PASSWORD:-admin}
+    ports:
+      - "${SBA_PORT:-8085}:8080"
+    networks:
+      - portal
 
   # ---------------------------------------------------------------------------
   # Jaeger — Tracing Distribuído (OpenTelemetry)
