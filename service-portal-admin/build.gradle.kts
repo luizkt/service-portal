@@ -22,6 +22,7 @@ extra["sbaVersion"] = "3.4.0"
 
 dependencies {
     implementation("de.codecentric:spring-boot-admin-starter-server:${property("sbaVersion")}")
+    implementation("org.springframework.boot:spring-boot-starter-web")
     implementation("org.springframework.boot:spring-boot-starter-security")
     implementation("org.springframework.boot:spring-boot-starter-actuator")
     testRuntimeOnly("org.junit.platform:junit-platform-launcher")
