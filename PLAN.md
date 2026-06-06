@@ -115,6 +115,7 @@ Manager (Kotlin, :8082) — dono da collection `workflows` (após migração fas
 | **Invalidação de cache cross-service (S3)** | Orquestrador + Manager | ✅ Feito | `CacheAdminController` (`DELETE /api/admin/cache/workflows[/{flowId}/versions/{version}]`) no orquestrador; Manager invalida via `RestClient` (`OrchestratorCacheClient` + `OrchestratorAuthService`) após `update()`/`deactivate()`; falha tolerante (warning, não propaga); validado e2e (chave Redis removida) + tolerância a falha; testes nos dois lados, gates JaCoCo ≥ 95% |
 | **Melhoria de logs: agrupamento por execução de flow (MDC/Tracing)** | Orquestrador | ✅ CONCLUÍDO (S8) | `ExecutionMdcFilter` (OncePerRequestFilter): captura/gera `executionId` via `X-Execution-Id`; MDC com `executionId`+`flowId`+`version`; propagação manual para Virtual Threads (v2); `X-Execution-Id` nos headers WebClient; `logback-spring.xml` com padrão MDC; 95 testes, 0 falhas |
 | **Monitoramento Avançado: Spring Boot Admin** | Todos os serviços | ✅ CONCLUÍDO (S9) | Novo módulo `service-portal-admin` (SBA Server 3.4.0 + Spring Security basic auth + form login); `spring-boot-admin-starter-client` em Orchestrator, BFF e Manager; actuator expandido (`threaddump`, `heapdump`, `loggers`, `env`, `beans`, `caches`); `/actuator/**` público em todos os SecurityConfig; `application-docker.yml` com `service-base-url` por serviço; docker-compose ativado na porta 8085 com healthcheck e `depends_on` nos 3 clients |
+| **Tracing Distribuído: Jaeger + OpenTelemetry** | Todos os serviços | ✅ CONCLUÍDO (S10) | `jaegertracing/all-in-one` ativado no docker-compose (porta 16686 UI + 4318 OTLP HTTP); `micrometer-tracing-bridge-otel` + `opentelemetry-exporter-otlp` nos 3 serviços; 100% sampling em dev; `WebClient.Builder` injetado (BFF + Orchestrator) e `RestClient.Builder` injetado (Manager) para propagação automática do `traceparent` em saídas HTTP; `io.opentelemetry.context.Context` propagado nas Virtual Threads do `OrchestrationV2Service` |
 
 ---
 
@@ -445,11 +446,7 @@ docker compose -f docker-compose-service-portal.yml up -d
 
 #### ~~Monitoramento Avançado: Spring Boot Admin (SBA)~~ ✅ CONCLUÍDO (S9)
 
-#### Tracing Distribuído: Jaeger (OpenTelemetry)
-- Adicionar container `jaegertracing/all-in-one` à infraestrutura.
-- Adicionar Micrometer Tracing + OTLP Exporter nos 3 serviços Java/Kotlin.
-- Configurar amostragem (sampling) de 100% para ambiente de dev.
-- Validar propagação do `traceId` do BFF até as Virtual Threads do Orchestrator.
+#### ~~Tracing Distribuído: Jaeger (OpenTelemetry)~~ ✅ CONCLUÍDO (S10)
 
 #### Monitoramento: Dashboard Grafana
 - Configurar `prometheus.yml` para realizar o scrape de todos os serviços (BFF, Manager, Orchestrator).
@@ -464,7 +461,23 @@ docker compose -f docker-compose-service-portal.yml up -d
 
 ---
 
-## Sessão mais recente — CONCLUÍDA ✅ (S9)
+## Sessão mais recente — CONCLUÍDA ✅ (S10)
+
+> Tracing Distribuído: Jaeger/OpenTelemetry nos 3 serviços com 100% sampling, propagação W3C `traceparent` em saídas HTTP e contexto OTel nas Virtual Threads do Orchestrator v2.
+
+### O que foi feito
+
+- **`jaegertracing/all-in-one`** ativado em `docker-compose-service-portal.yml`: porta `${JAEGER_UI_PORT:-16686}:16686` (UI), `4318:4318` (OTLP HTTP); healthcheck via `wget` à porta 16686; `service_started` condition em `depends_on` de orchestrator, bff e manager
+- **3 serviços** receberam `micrometer-tracing-bridge-otel` + `opentelemetry-exporter-otlp` (versões gerenciadas pelo Spring Boot BOM); `management.tracing.sampling.probability: 1.0` e `management.otlp.tracing.endpoint` em `application.yml`; override para `http://jaeger:4318/v1/traces` em `application-docker.yml`
+- **`WebClient.Builder` injetado** em `WebClientConfig.java` (Orchestrator) e `WebClientConfig.java` (BFF) — Spring Boot aplica `ObservationWebClientCustomizer` automaticamente → header `traceparent` W3C adicionado em todas as saídas HTTP (integrações + chamadas ao Manager/Orchestrator)
+- **`RestClient.Builder` injetado** em `OrchestratorClientConfig.kt` (Manager) → `ObservationRestClientCustomizer` propaga `traceparent` nas chamadas de invalidação de cache Manager→Orchestrator
+- **`OrchestrationV2Service`** — `io.opentelemetry.context.Context.current()` capturado antes do `vte.submit()`; cada virtual thread abre `Scope` via `otelCtx.makeCurrent()` antes de executar + fecha no finally — trace OTel é visível no Jaeger mesmo para as execuções paralelas do v2
+- **`OrchestratorClientConfigTest.kt`** atualizado para nova assinatura `orchestratorRestClient(RestClient.Builder, String)`
+- **Builds**: todos os 3 serviços `BUILD SUCCESSFUL` (Orchestrator, BFF, Manager)
+
+---
+
+## Sessão anterior — CONCLUÍDA ✅ (S9)
 
 > Spring Boot Admin: servidor SBA com basic auth + form login, clientes nos 3 serviços, actuator expandido (threaddump, heapdump, loggers, env), UI disponível em http://localhost:8085.
 

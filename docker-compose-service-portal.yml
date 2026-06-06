@@ -301,6 +301,7 @@ services:
       SPRING_BOOT_ADMIN_URL:       http://spring-boot-admin:8080
       SBA_USERNAME:                ${SBA_USERNAME:-admin}
       SBA_PASSWORD:                ${SBA_PASSWORD:-admin}
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4318
     ports:
       - "${MANAGER_PORT:-8082}:${MANAGER_INTERNAL_PORT:-8082}"
     depends_on:
@@ -308,6 +309,8 @@ services:
         condition: service_healthy
       spring-boot-admin:
         condition: service_healthy
+      jaeger:
+        condition: service_started
     networks:
       - portal
 
@@ -437,6 +440,7 @@ services:
       SPRING_BOOT_ADMIN_URL:        http://spring-boot-admin:8080
       SBA_USERNAME:                 ${SBA_USERNAME:-admin}
       SBA_PASSWORD:                 ${SBA_PASSWORD:-admin}
+      OTEL_EXPORTER_OTLP_ENDPOINT:  http://jaeger:4318
     ports:
       - "${ORCHESTRATOR_PORT:-8080}:${ORCHESTRATOR_INTERNAL_PORT:-8080}"
     depends_on:
@@ -456,6 +460,8 @@ services:
         condition: service_healthy
       spring-boot-admin:
         condition: service_healthy
+      jaeger:
+        condition: service_started
     networks:
       - portal
 
@@ -501,6 +507,7 @@ services:
       SPRING_BOOT_ADMIN_URL:      http://spring-boot-admin:8080
       SBA_USERNAME:               ${SBA_USERNAME:-admin}
       SBA_PASSWORD:               ${SBA_PASSWORD:-admin}
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4318
     ports:
       - "${BFF_PORT:-8081}:${BFF_INTERNAL_PORT:-8081}"
     depends_on:
@@ -512,6 +519,8 @@ services:
         condition: service_healthy
       spring-boot-admin:
         condition: service_healthy
+      jaeger:
+        condition: service_started
     networks:
       - portal
 
@@ -628,18 +637,26 @@ services:
 
   # ---------------------------------------------------------------------------
   # Jaeger — Tracing Distribuído (OpenTelemetry)
+  # UI: http://localhost:16686
+  # OTLP HTTP: porta 4318 (usado pelos serviços via application-docker.yml)
   # ---------------------------------------------------------------------------
-  # jaeger:
-  #   image: jaegertracing/all-in-one:latest
-  #   container_name: portal-jaeger
-  #   ports:
-  #     - "16686:16686" # UI
-  #     - "4317:4317"   # OTLP gRPC
-  #     - "4318:4318"   # OTLP HTTP
-  #   environment:
-  #     - COLLECTOR_OTLP_ENABLED=true
-  #   networks:
-  #     - portal
+  jaeger:
+    image: jaegertracing/all-in-one:latest
+    container_name: portal-jaeger
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:16686/ > /dev/null 2>&1 || exit 1"]
+      start_period: 10s
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    environment:
+      COLLECTOR_OTLP_ENABLED: "true"
+    ports:
+      - "${JAEGER_UI_PORT:-16686}:16686"
+      - "4318:4318"
+    networks:
+      - portal
 
 # =============================================================================
 # Volumes
