@@ -117,9 +117,10 @@ Manager (Kotlin, :8082) — dono da collection `workflows` (após migração fas
 | **Monitoramento Avançado: Spring Boot Admin** | Todos os serviços | ✅ CONCLUÍDO (S9) | Novo módulo `service-portal-admin` (SBA Server 3.4.0 + Spring Security basic auth + form login); `spring-boot-admin-starter-client` em Orchestrator, BFF e Manager; actuator expandido (`threaddump`, `heapdump`, `loggers`, `env`, `beans`, `caches`); `/actuator/**` público em todos os SecurityConfig; `application-docker.yml` com `service-base-url` por serviço; docker-compose ativado na porta 8085 com healthcheck e `depends_on` nos 3 clients |
 | **Tracing Distribuído: Jaeger + OpenTelemetry** | Todos os serviços | ✅ CONCLUÍDO (S10) | `jaegertracing/all-in-one` ativado no docker-compose (porta 16686 UI + 4318 OTLP HTTP); `micrometer-tracing-bridge-otel` + `opentelemetry-exporter-otlp` nos 3 serviços; 100% sampling em dev; `WebClient.Builder` injetado (BFF + Orchestrator) e `RestClient.Builder` injetado (Manager) para propagação automática do `traceparent` em saídas HTTP; `io.opentelemetry.context.Context` propagado nas Virtual Threads do `OrchestrationV2Service` |
 | **Dashboard Grafana + Prometheus** | Todos os serviços + Infra | ✅ CONCLUÍDO (S11) | `micrometer-registry-prometheus` nos 3 serviços; `/actuator/prometheus` exposto; histogramas HTTP habilitados (`percentiles-histogram`); `prometheus.yml` com scrape dos 3 serviços; Grafana com provisioning automático (datasource + dashboard); dashboard "Service Portal" com 4 seções (Infra, RPM, Latência, Status) + variável `$service`; exportado em `docs/monitoring/dashboard.json` |
-| **Melhoria: Exclusão de Health Checks das métricas** | Todos os serviços | ⬜ Pendente | S12 | Limpar métricas de RPS/Latência removendo chamadas sintéticas (`/actuator/health` e `/actuator/prometheus`) para que o dashboard reflita apenas o tráfego real de negócio. |
-| **Swagger/OpenAPI — BFF e Manager** | BFF + Manager | ⬜ Planejado (S15) | `springdoc-openapi-starter-webmvc-ui` nos dois serviços; `SecurityConfig` libera `/swagger-ui/**` e `/v3/api-docs/**`; `@OpenAPIDefinition` com title/version/description; anotações `@Tag`/`@Operation` nos controllers; UI em `:8081/swagger-ui.html` (BFF) e `:8082/swagger-ui.html` (Manager). |
-| **Swagger/OpenAPI — Orchestrator** | Orchestrator | ⬜ Planejado (S16) | Avaliação: Orchestrator tem dupla dep `starter-web` + `starter-webflux` (WebFlux usado só pelo WebClient); adicionar `springdoc-openapi-starter-webmvc-ui`; excluir WebFlux da autoconfiguração SpringDoc (`springdoc.use-fn-routes: false`); SecurityConfig libera paths do Swagger; UI em `:8080/swagger-ui.html`. |
+| **Melhoria: Exclusão de Health Checks das métricas** | Todos os serviços | ✅ CONCLUÍDO (S12) | `management.metrics.web.server.request.ignore-patterns` com `/actuator/health` e `/actuator/prometheus` nos 3 `application.yml`; 3 builds `BUILD SUCCESSFUL`. |
+| **Swagger/OpenAPI — BFF e Manager** | BFF + Manager | ✅ CONCLUÍDO (S15) | `springdoc-openapi-starter-webmvc-ui:2.8.8` nos dois serviços; `use-fn-routes: false` no BFF (dual dep web+webflux); `SecurityConfig` libera `/swagger-ui/**`, `/swagger-ui.html`, `/v3/api-docs/**`; `OpenApiConfig` com `@OpenAPIDefinition`; `@Tag` nos 7 controllers BFF e 5 controllers Manager; 1 teste novo em cada `SecurityConfigIT`; BFF 95 testes, Manager 155 testes, 0 falhas. |
+| **Swagger/OpenAPI — Orchestrator** | Orchestrator | ✅ CONCLUÍDO (S16) | `springdoc-openapi-starter-webmvc-ui:2.8.8`; `use-fn-routes: false` (dual dep web+webflux); `SecurityConfig` libera `/swagger-ui/**`, `/swagger-ui.html`, `/v3/api-docs`, `/v3/api-docs/**`; `OpenApiConfig` com `@OpenAPIDefinition`; `@Tag` nos 3 controllers (Execução, Cache Admin, Auth); 1 teste novo em `SecurityIT`; BUILD SUCCESSFUL. |
+| **Swagger — enriquecimento BFF e Manager** | BFF + Manager | ✅ CONCLUÍDO (S17) | `@Schema` nos DTOs (5 DTOs BFF + 10 DTOs Manager com `description` + `example` por campo); `@Operation` + `@ApiResponse`/`@ApiResponses` + `@ExampleObject` em todos os endpoints (7 controllers BFF, 5 controllers Manager); `@Parameter` em path/query params; exemplos com dados reais (`create-order-v1`, `validate-client`, `check-credit-limit`); ktlint max-line-length corrigido (linhas ≤ 140); BFF e Manager `spotlessApply` + `test` BUILD SUCCESSFUL. |
 
 ---
 
@@ -465,7 +466,7 @@ docker compose -f docker-compose-service-portal.yml up -d
 
 ---
 
-## Atividade planejada ⬜ (S16) — Swagger/OpenAPI no Orchestrator
+## Atividade ✅ CONCLUÍDA (S16) — Swagger/OpenAPI no Orchestrator
 
 > Avaliação e adição da UI de documentação interativa no generic-orchestrator.
 
@@ -599,7 +600,357 @@ springdoc:
 
 ---
 
-## Sessão mais recente — CONCLUÍDA ✅ (S14)
+## Atividade ✅ CONCLUÍDA (S17) — Swagger: enriquecimento BFF e Manager
+
+> Incrementar a documentação OpenAPI com payloads reais, exemplos de resposta 200/201, descrições de parâmetros e schemas detalhados nos DTOs.
+
+### Contexto
+
+A documentação atual (S15) tem apenas `@Tag` nos controllers. O SpringDoc consegue gerar schemas automaticamente a partir dos DTOs tipados, mas precisa de `@Schema` nos campos para descrições e exemplos, e de `@Operation`/`@ApiResponse`/`@ExampleObject` nos endpoints para mostrar payloads completos e respostas de exemplo. Controllers que retornam `Map<String,Object>` (como o `FlowProxyController` do BFF) precisam de exemplos JSON raw em string — o SpringDoc não consegue inferir o schema por reflexão.
+
+### Técnicas
+
+| Anotação | Onde aplica | Efeito na UI |
+|---|---|---|
+| `@Schema(description, example)` | Campos dos DTOs | Popula descrição + valor de exemplo por campo |
+| `@Operation(summary, description)` | Métodos dos controllers | Descrição do endpoint |
+| `@ApiResponse` + `@Content` + `@ExampleObject` | Métodos dos controllers | Resposta completa com JSON de exemplo |
+| `@Parameter(description, example)` | Path/query params | Documenta parâmetros de URL |
+| `@io.swagger.v3.oas.annotations.parameters.RequestBody` | POST/PUT com body | Body com exemplo inline |
+
+---
+
+### BFF (Java) — DTOs
+
+#### `LoginRequest`
+```java
+@Schema(description = "Credenciais para login", example = "it")
+private String username;
+
+@Schema(description = "Senha do usuário", example = "itadmin")
+private String password;
+```
+
+#### `AuthentikTokenDto` (resposta do login)
+```java
+@Schema(description = "JWT de acesso", example = "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9...")
+private String accessToken;
+
+@Schema(description = "Tempo de expiração em segundos", example = "3600")
+private Integer expiresIn;
+
+@Schema(description = "Tipo do token", example = "Bearer")
+private String tokenType;
+```
+
+#### `AuthConfigDto`
+```java
+@Schema(description = "URL base do issuer Authentik", example = "http://localhost:9000/application/o/service-portal/")
+private String issuerUri;
+
+@Schema(description = "Client ID público da SPA", example = "service-portal-spa")
+private String clientId;
+
+@Schema(description = "Scopes solicitados no fluxo PKCE", example = "[\"openid\",\"profile\",\"email\",\"groups\"]")
+private List<String> scopes;
+```
+
+#### `MenuItemDto`
+```java
+@Schema(description = "Identificador da feature", example = "flow-manager")
+private String id;
+
+@Schema(description = "Rótulo exibido na sidebar", example = "Gerenciador de Fluxos")
+private String label;
+
+@Schema(description = "Ícone da sidebar", example = "workflow")
+private String icon;
+
+@Schema(description = "URL para buscar o UI Schema desta feature", example = "/bff/features/flow-manager/ui-schema")
+private String uiSchemaUrl;
+```
+
+#### `UiSchemaDto`
+```java
+@Schema(description = "Identificador da feature", example = "flow-manager")
+private String featureId;
+
+@Schema(description = "Tipo de componente React a renderizar", example = "flow-manager")
+private String type;
+
+@Schema(description = "Título exibido no cabeçalho da feature", example = "Gerenciador de Fluxos")
+private String title;
+```
+
+---
+
+### BFF (Java) — Endpoints
+
+#### `POST /bff/auth/login`
+```java
+@Operation(summary = "Autenticar usuário", description = "Autentica via Authentik Flow Executor server-side e retorna tokens OAuth2/OIDC.")
+@ApiResponse(responseCode = "200", description = "Login bem-sucedido",
+  content = @Content(examples = @ExampleObject(value = """
+    {"access_token":"eyJhbGciOiJSUzI1NiJ9...","id_token":"eyJhbGciOiJSUzI1NiJ9...","expires_in":3600,"token_type":"Bearer"}""")))
+@ApiResponse(responseCode = "401", description = "Credenciais inválidas")
+```
+
+#### `GET /bff/auth/config`
+```java
+@Operation(summary = "Configuração OAuth2/PKCE", description = "Retorna issuer, client_id e scopes para o frontend configurar o fluxo PKCE sem hardcoded.")
+@ApiResponse(responseCode = "200", description = "Configuração do provider",
+  content = @Content(examples = @ExampleObject(value = """
+    {"issuerUri":"http://localhost:9000/application/o/service-portal/","clientId":"service-portal-spa","scopes":["openid","profile","email","groups"]}""")))
+```
+
+#### `GET /bff/menu`
+```java
+@Operation(summary = "Itens de menu filtrados por grupo", description = "Retorna apenas os itens que o usuário autenticado tem permissão de ver (Server Driven UI).")
+@ApiResponse(responseCode = "200", description = "Lista de itens visíveis ao usuário",
+  content = @Content(examples = @ExampleObject(name = "ADMIN", value = """
+    [{"id":"flow-manager","label":"Gerenciador de Fluxos","icon":"workflow","uiSchemaUrl":"/bff/features/flow-manager/ui-schema"},
+     {"id":"integration-manager","label":"Integrações","icon":"integration","uiSchemaUrl":"/bff/features/integration-manager/ui-schema"},
+     {"id":"contract-manager","label":"Contratos","icon":"contract","uiSchemaUrl":"/bff/features/contract-manager/ui-schema"},
+     {"id":"validation-manager","label":"Validações","icon":"validation","uiSchemaUrl":"/bff/features/validation-manager/ui-schema"}]""")))
+```
+
+#### `GET /bff/flows` (listagem paginada)
+```java
+@Operation(summary = "Listar flows ativos (paginado)")
+@Parameter(name = "page", description = "Número da página (0-based)", example = "0")
+@Parameter(name = "size", description = "Itens por página", example = "20")
+@Parameter(name = "status", description = "Filtro de status. Use 'active' para listar sem paginação (consumo do orquestrador)", example = "active")
+@ApiResponse(responseCode = "200", description = "Página de flows",
+  content = @Content(examples = @ExampleObject(value = """
+    {"content":[{"flowId":"create-order-v1","version":"1.0.0","description":"Fluxo de criação de pedido","active":true,"createdAt":"2026-06-01T10:00:00","updatedAt":"2026-06-01T10:00:00"}],
+     "totalElements":1,"totalPages":1,"size":20,"number":0}""")))
+```
+
+#### `POST /bff/flows` (criação com YAML)
+```java
+@Operation(summary = "Criar flow via YAML")
+@io.swagger.v3.oas.annotations.parameters.RequestBody(
+  content = @Content(mediaType = "text/plain", examples = @ExampleObject(value = """
+    flow:
+      flowId: create-order-v1
+      version: "1.0.0"
+      description: "Fluxo de criação de pedido"
+      active: true
+      contract:
+        fields:
+          - name: clientId
+            type: STRING
+            required: true
+          - name: amount
+            type: DECIMAL
+            required: true
+      integrations:
+        - id: validate-client
+          order: 1
+          type: HTTP
+          continueOnError: false
+          http:
+            url: "http://api.exemplo.com/clients/{{contract.clientId}}"
+            method: GET""")))
+@ApiResponse(responseCode = "201", description = "Flow criado",
+  content = @Content(examples = @ExampleObject(value = """
+    {"flowId":"create-order-v1","version":"1.0.0","description":"Fluxo de criação de pedido","active":true,"createdAt":"2026-06-01T10:00:00","updatedAt":"2026-06-01T10:00:00"}""")))
+```
+
+#### `POST .../executions` e `POST .../executions/v2`
+```java
+@Operation(summary = "Executar flow (v1 — sequencial)")
+@io.swagger.v3.oas.annotations.parameters.RequestBody(
+  content = @Content(mediaType = "application/json",
+    examples = @ExampleObject(value = """{"clientId":"ABC123","amount":150.00}""")))
+@ApiResponse(responseCode = "200", description = "Execução concluída",
+  content = @Content(examples = @ExampleObject(value = """
+    {"flowId":"create-order-v1","version":"1.0.0","status":"SUCCESS",
+     "result":{"validate-client":{"clientId":"ABC123","name":"WireMock Simulated Client","active":true},
+               "save-order":{"orderId":"ord-uuid-here","status":"CREATED"}},
+     "validations":{"check-credit-limit":{"approved":true,"limit":5000.00}}}""")))
+```
+
+---
+
+### Manager (Kotlin) — DTOs
+
+#### `FlowSummaryDto`
+```kotlin
+@Schema(description = "Identificador único do flow", example = "create-order-v1")
+val flowId: String
+
+@Schema(description = "Versão SemVer gerada automaticamente no PUT", example = "1.0.0")
+val version: String
+
+@Schema(description = "Descrição legível do flow", example = "Fluxo de criação de pedido")
+val description: String?
+
+@Schema(description = "Se false, foi desativado por uma atualização (versão antiga)", example = "true")
+val active: Boolean
+```
+
+#### `IntegrationRequest` / `IntegrationDto`
+```kotlin
+@Schema(description = "Identificador único da integração", example = "validate-client")
+val integrationId: String
+
+@Schema(description = "Tipo da integração", allowableValues = ["HTTP"], example = "HTTP")
+val type: String
+
+@Schema(description = "URL com suporte a templates {{contract.field}}", example = "http://api.exemplo.com/clients/{{contract.clientId}}")
+val url: String
+
+@Schema(description = "Método HTTP", allowableValues = ["GET","POST","PUT","DELETE","PATCH"], example = "GET")
+val method: String
+
+@Schema(description = "Timeout em milissegundos", example = "5000")
+val timeout: Int
+```
+
+#### `ContractRequest` / `ContractDto`
+```kotlin
+@Schema(description = "Identificador único do contrato", example = "create-order")
+val contractId: String
+
+// Nos ContractField:
+@Schema(description = "Nome do campo", example = "clientId")
+val name: String
+
+@Schema(description = "Tipo do campo", allowableValues = ["STRING","INTEGER","DECIMAL","BOOLEAN","ARRAY","OBJECT"], example = "STRING")
+val type: String
+
+@Schema(description = "Campo obrigatório", example = "true")
+val required: Boolean
+```
+
+#### `LoginRequest` / `LoginResponse`
+```kotlin
+// LoginRequest
+@Schema(example = "admin")   val username: String
+@Schema(example = "admin")   val password: String
+
+// LoginResponse
+@Schema(description = "JWT HS512", example = "eyJhbGciOiJIUzUxMiJ9...")
+val token: String
+@Schema(description = "Tempo de expiração em segundos", example = "3600")
+val expiresIn: Long
+```
+
+---
+
+### Manager (Kotlin) — Endpoints
+
+#### `POST /api/auth/tokens`
+```kotlin
+@Operation(summary = "Obter token JWT", description = "Autenticação server-to-server (admin/admin). Retorna JWT HS512 para uso como Bearer nas demais chamadas.")
+@ApiResponse(responseCode = "201", description = "Token gerado",
+  content = [Content(examples = [ExampleObject(value = """{"token":"eyJhbGciOiJIUzUxMiJ9...","expiresIn":3600}""")])])
+@ApiResponse(responseCode = "401", description = "Credenciais inválidas")
+```
+
+#### `POST /manager/flows` (YAML)
+```kotlin
+@Operation(summary = "Criar flow via YAML")
+@io.swagger.v3.oas.annotations.parameters.RequestBody(
+  content = [Content(mediaType = "text/plain",
+    examples = [ExampleObject(value = "<mesmo YAML do BFF>")])])
+@ApiResponse(responseCode = "201", description = "Flow criado — versão inicial 1.0.0",
+  content = [Content(examples = [ExampleObject(value = """{"flowId":"create-order-v1","version":"1.0.0",...}""")])])
+@ApiResponse(responseCode = "409", description = "Flow já existe com esse flowId + version")
+```
+
+#### `PUT /manager/flows/{flowId}/versions/{version}` (SemVer)
+```kotlin
+@Operation(summary = "Atualizar flow (gera nova versão SemVer)",
+  description = "Desativa a versão atual e cria nova versão calculada automaticamente: MAJOR se `contract` mudou, MINOR se `integrations` mudou, PATCH para demais campos.")
+@ApiResponse(responseCode = "201", description = "Nova versão criada — header Location aponta para ela",
+  headers = [Header(name = "Location", description = "URL da nova versão", example = "/manager/flows/create-order-v1/versions/1.1.0")])
+```
+
+#### `GET /manager/flows/{flowId}/versions`
+```kotlin
+@Operation(summary = "Histórico de versões de um flow")
+@Parameter(name = "status", description = "Filtro: 'active' (somente ativas), 'inactive' (desativadas/auditoria), omitido = todas", example = "inactive")
+@ApiResponse(responseCode = "200", description = "Lista de versões",
+  content = [Content(examples = [ExampleObject(value = """
+    [{"flowId":"create-order-v1","version":"1.0.0","active":false,...},
+     {"flowId":"create-order-v1","version":"1.1.0","active":true,...}]""")])])
+```
+
+#### `GET /manager/flows/{flowId}/versions/{version}/examples`
+```kotlin
+@Operation(summary = "Exemplo de payload para execução",
+  description = "Gera um JSON de exemplo a partir dos campos do contrato do flow. Usado pelo frontend para pré-popular o textarea de execução.")
+@ApiResponse(responseCode = "200",
+  content = [Content(examples = [ExampleObject(value = """
+    {"example":{"clientId":"exemplo","amount":0},"fields":[{"name":"clientId","type":"STRING","required":true},{"name":"amount","type":"DECIMAL","required":true}]}""")])])
+```
+
+---
+
+### Checklist de implementação
+
+- [ ] `@Schema` nos 5 DTOs do BFF (`LoginRequest`, `AuthentikTokenDto`, `AuthConfigDto`, `MenuItemDto`, `UiSchemaDto`)
+- [ ] `@Operation` + `@ApiResponse` + `@ExampleObject` nos 11 endpoints do BFF
+- [ ] `@Schema` nos 8 DTOs do Manager (`FlowSummaryDto`, `LoginRequest`, `LoginResponse`, `IntegrationRequest`, `IntegrationDto`, `ContractRequest`, `ContractDto`, `ValidationRequest`, `ValidationDto`, `FlowExampleDto`, `ContractField`)
+- [ ] `@Operation` + `@ApiResponse` nos 24 endpoints do Manager (5 controllers × ~5 endpoints)
+- [ ] `spotlessApply` + `test` nos dois serviços
+- [ ] Gate JaCoCo ≥ 95% mantido (anotações não adicionam lógica testável)
+
+---
+
+## Sessão mais recente — CONCLUÍDA ✅ (S16)
+
+> Swagger/OpenAPI no Orchestrator: UI interativa em `/swagger-ui.html` na porta 8080 com autenticação liberada, `@OpenAPIDefinition` e `@Tag` nos 3 controllers.
+
+### O que foi feito
+
+- **`springdoc-openapi-starter-webmvc-ui:2.8.8`** adicionado ao `build.gradle.kts` do Orchestrator
+- **`application.yml`**: bloco `springdoc` com `swagger-ui.path`, `api-docs.path` e `use-fn-routes: false` (evita conflito com WebFlux no classpath — mesmo padrão do BFF)
+- **`SecurityConfig.java`**: `/swagger-ui/**`, `/swagger-ui.html`, `/v3/api-docs`, `/v3/api-docs/**` adicionados ao bloco `permitAll()` (entrada explícita `/v3/api-docs` necessária — Ant `/**` não bate no path base)
+- **`OpenApiConfig.java`** criado em `com/orchestrator/config/`: `@Configuration` + `@OpenAPIDefinition` (title "Generic Orchestrator API", version "v1", server `:8080`)
+- **`@Tag`** adicionado nos 3 controllers: `OrchestrationController` → `Execução`, `CacheAdminController` → `Cache Admin`, `AuthController` → `Auth`
+- **`SecurityIT.java`**: 1 caso novo `GET /v3/api-docs` → 200 sem token
+- `spotlessApply` + `test`: **BUILD SUCCESSFUL**, 0 falhas
+- **URL de acesso** (stack rodando): `http://localhost:8080/swagger-ui.html`
+
+---
+
+## Sessão anterior — CONCLUÍDA ✅ (S15)
+
+> Swagger/OpenAPI no BFF e Manager: UI interativa em `/swagger-ui.html` nos dois serviços com autenticação liberada, `@OpenAPIDefinition` e `@Tag` nos controllers.
+
+### O que foi feito
+
+- **`springdoc-openapi-starter-webmvc-ui:2.8.8`** adicionado ao `build.gradle.kts` do BFF e do Manager
+- **BFF** (`application.yml`): bloco `springdoc` com `swagger-ui.path`, `api-docs.path` e `use-fn-routes: false` (evita conflito com WebFlux no classpath)
+- **Manager** (`application.yml`): bloco `springdoc` com `swagger-ui.path` e `api-docs.path`
+- **`SecurityConfig.java` (BFF)**: `/swagger-ui/**`, `/swagger-ui.html`, `/v3/api-docs/**` adicionados ao bloco `permitAll()`
+- **`SecurityConfig.kt` (Manager)**: mesmos paths liberados no filtro JWT
+- **`OpenApiConfig.java` (BFF)**: `@Configuration` + `@OpenAPIDefinition` (title "Service Portal BFF", version "v1", server `:8081`)
+- **`OpenApiConfig.kt` (Manager)**: idem (title "Service Portal Manager", version "v1", server `:8082`); classe excluída do JaCoCo em `coverageExclusions`
+- **`@Tag`** adicionado nos 7 controllers do BFF: `Flows`, `Auth` (AuthConfig + Login), `Menu`, `Integrations`, `Contracts`, `Validations`
+- **`@Tag`** adicionado nos 5 controllers do Manager: `Flows`, `Integrations`, `Contracts`, `Validations`, `Auth`
+- **Testes**: 1 caso novo em cada `SecurityConfigIT` (`GET /v3/api-docs` → 200 sem token); BFF **95 testes**, Manager **155 testes**, 0 falhas, gates JaCoCo ≥ 95% OK
+- **URLs de acesso** (stack rodando): `http://localhost:8081/swagger-ui.html` (BFF) e `http://localhost:8082/swagger-ui.html` (Manager)
+
+---
+
+## Sessão anterior — CONCLUÍDA ✅ (S12b)
+
+> Melhoria de métricas: exclusão de health checks da coleta do Micrometer nos 3 serviços.
+
+### O que foi feito
+
+- `management.metrics.web.server.request.ignore-patterns` com `/actuator/health` e `/actuator/prometheus` adicionado nos 3 `application.yml` (`generic-orchestrator`, `service-portal-bff`, `service-portal-manager`)
+- Nenhum `application-docker.yml` sobrescreve a seção `management.metrics` — config herdada automaticamente em todos os perfis
+- **Impacto**: painéis "Throughput (RPM)", "Latência P95/P99" e "Status HTTP" no Grafana passam a refletir apenas tráfego real de negócio; health checks do Docker/SBA e scrapes do Prometheus não mais inflarão o RPS nem puxarão a latência média para baixo
+- 3 builds `BUILD SUCCESSFUL` (Orchestrator, BFF, Manager), todos os testes passando
+
+---
+
+## Sessão anterior — CONCLUÍDA ✅ (S14)
 
 > Endpoint de exemplo de payload por flow: `GET /manager/flows/{flowId}/versions/{version}/examples` gera JSON de exemplo a partir dos campos do contrato; BFF proxia; FlowManager exibe tabela do contrato e pré-popula o textarea de execução.
 
@@ -1345,3 +1696,20 @@ Iniciar a próxima evolução arquitetural. Possíveis candidatas:
 
 ### Pendência marcada
 - `GET /manager/flows/{flowId}/versions?status=inactive` — endpoint de histórico para listar versões desativadas (auditoria/rollback)
+
+---
+
+## Sessão — S17 concluído (2026-06-06)
+
+### S17 — Swagger: enriquecimento BFF e Manager
+
+**BFF** (`service-portal-bff`):
+- 5 DTOs anotados com `@Schema(description, example)`: `LoginRequest`, `AuthentikTokenDto`, `AuthConfigDto`, `MenuItemDto`, `UiSchemaDto`
+- 7 controllers anotados com `@Operation` + `@ApiResponse`/`@ApiResponses` + `@Parameter`: `AuthConfigController`, `LoginController`, `BffMenuController`, `FlowProxyController`, `ContractProxyController`, `IntegrationProxyController`, `ValidationProxyController`
+- `spotlessApply` + `test` — BUILD SUCCESSFUL
+
+**Manager** (`service-portal-manager`):
+- 10 DTOs anotados com `@Schema` em `Dtos.kt` + `ContractDocument.kt`
+- 5 controllers anotados: `AuthController`, `FlowController`, `ContractController`, `IntegrationController`, `ValidationController`
+- ktlint `max-line-length: 140` — todas as linhas longas quebradas em multi-line
+- `spotlessApply` + `test` — BUILD SUCCESSFUL
