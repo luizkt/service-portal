@@ -117,6 +117,9 @@ Manager (Kotlin, :8082) — dono da collection `workflows` (após migração fas
 | **Monitoramento Avançado: Spring Boot Admin** | Todos os serviços | ✅ CONCLUÍDO (S9) | Novo módulo `service-portal-admin` (SBA Server 3.4.0 + Spring Security basic auth + form login); `spring-boot-admin-starter-client` em Orchestrator, BFF e Manager; actuator expandido (`threaddump`, `heapdump`, `loggers`, `env`, `beans`, `caches`); `/actuator/**` público em todos os SecurityConfig; `application-docker.yml` com `service-base-url` por serviço; docker-compose ativado na porta 8085 com healthcheck e `depends_on` nos 3 clients |
 | **Tracing Distribuído: Jaeger + OpenTelemetry** | Todos os serviços | ✅ CONCLUÍDO (S10) | `jaegertracing/all-in-one` ativado no docker-compose (porta 16686 UI + 4318 OTLP HTTP); `micrometer-tracing-bridge-otel` + `opentelemetry-exporter-otlp` nos 3 serviços; 100% sampling em dev; `WebClient.Builder` injetado (BFF + Orchestrator) e `RestClient.Builder` injetado (Manager) para propagação automática do `traceparent` em saídas HTTP; `io.opentelemetry.context.Context` propagado nas Virtual Threads do `OrchestrationV2Service` |
 | **Dashboard Grafana + Prometheus** | Todos os serviços + Infra | ✅ CONCLUÍDO (S11) | `micrometer-registry-prometheus` nos 3 serviços; `/actuator/prometheus` exposto; histogramas HTTP habilitados (`percentiles-histogram`); `prometheus.yml` com scrape dos 3 serviços; Grafana com provisioning automático (datasource + dashboard); dashboard "Service Portal" com 4 seções (Infra, RPM, Latência, Status) + variável `$service`; exportado em `docs/monitoring/dashboard.json` |
+| **Melhoria: Exclusão de Health Checks das métricas** | Todos os serviços | ⬜ Pendente | S12 | Limpar métricas de RPS/Latência removendo chamadas sintéticas (`/actuator/health` e `/actuator/prometheus`) para que o dashboard reflita apenas o tráfego real de negócio. |
+| **Swagger/OpenAPI — BFF e Manager** | BFF + Manager | ⬜ Planejado (S15) | `springdoc-openapi-starter-webmvc-ui` nos dois serviços; `SecurityConfig` libera `/swagger-ui/**` e `/v3/api-docs/**`; `@OpenAPIDefinition` com title/version/description; anotações `@Tag`/`@Operation` nos controllers; UI em `:8081/swagger-ui.html` (BFF) e `:8082/swagger-ui.html` (Manager). |
+| **Swagger/OpenAPI — Orchestrator** | Orchestrator | ⬜ Planejado (S16) | Avaliação: Orchestrator tem dupla dep `starter-web` + `starter-webflux` (WebFlux usado só pelo WebClient); adicionar `springdoc-openapi-starter-webmvc-ui`; excluir WebFlux da autoconfiguração SpringDoc (`springdoc.use-fn-routes: false`); SecurityConfig libera paths do Swagger; UI em `:8080/swagger-ui.html`. |
 
 ---
 
@@ -462,7 +465,153 @@ docker compose -f docker-compose-service-portal.yml up -d
 
 ---
 
-## Sessão mais recente — CONCLUÍDA ✅ (S13)
+## Atividade planejada ⬜ (S16) — Swagger/OpenAPI no Orchestrator
+
+> Avaliação e adição da UI de documentação interativa no generic-orchestrator.
+
+### Contexto
+
+O Orchestrator tem dupla dependência: `spring-boot-starter-web` (SpringMVC, que serve os controllers REST) e `spring-boot-starter-webflux` (usado exclusivamente pelo `WebClient` para chamadas HTTP de saída). O SpringDoc tem dois starters separados — um para MVC e outro para WebFlux; como o servidor é MVC, deve-se usar `springdoc-openapi-starter-webmvc-ui` e desativar a autoconfiguração do side WebFlux.
+
+### O que fazer
+
+**`build.gradle.kts`**
+- Adicionar `implementation("org.springdoc:springdoc-openapi-starter-webmvc-ui:2.8.x")`
+
+**`application.yml`**
+```yaml
+springdoc:
+  swagger-ui:
+    path: /swagger-ui.html
+  api-docs:
+    path: /v3/api-docs
+  use-fn-routes: false   # evita conflito com WebFlux functional routes
+```
+
+**`SecurityConfig.java`**
+- Adicionar ao bloco `permitAll()`: `/swagger-ui/**`, `/swagger-ui.html`, `/v3/api-docs/**`
+
+**Configuração global** (`OpenApiConfig.java` ou anotação na `Application`)
+```java
+@OpenAPIDefinition(
+  info = @Info(title = "Generic Orchestrator API", version = "v1",
+               description = "Execução sequencial (v1) e paralela (v2) de flows"),
+  servers = @Server(url = "http://localhost:8080")
+)
+```
+
+**Anotações nos controllers principais**
+- `OrchestrationController`: `@Tag(name = "Execução")`, `@Operation` nos endpoints v1/v2
+- `AuthController` / `CacheAdminController`: `@Tag` respectivos
+
+**Testes**
+- `SecurityIT`: adicionar caso verificando `GET /v3/api-docs` retorna 200 sem token
+
+**URL de acesso:** `http://localhost:8080/swagger-ui.html`
+
+---
+
+## Atividade planejada ⬜ (S15) — Swagger/OpenAPI no BFF e Manager
+
+> Adição da UI de documentação interativa nos dois serviços que expõem APIs consumidas pelo frontend e pelos operadores.
+
+### Contexto
+
+Nenhum dos dois serviços tem `springdoc-openapi-starter-webmvc-ui` no `build.gradle.kts`. Ambos usam Spring Boot 3 + SpringMVC puro (sem WebFlux no classpath). A UI de documentação beneficia especialmente o BFF, que agrega todos os endpoints visíveis ao frontend e aos integradores.
+
+### O que fazer
+
+#### BFF (Java — porta 8081)
+
+**`build.gradle.kts`**
+- Adicionar `implementation("org.springdoc:springdoc-openapi-starter-webmvc-ui:2.8.x")`
+
+**`application.yml`**
+```yaml
+springdoc:
+  swagger-ui:
+    path: /swagger-ui.html
+  api-docs:
+    path: /v3/api-docs
+```
+
+**`SecurityConfig.java`**
+- Adicionar ao bloco `permitAll()`: `/swagger-ui/**`, `/swagger-ui.html`, `/v3/api-docs/**`
+
+**Configuração global** (`OpenApiConfig.java`)
+```java
+@OpenAPIDefinition(
+  info = @Info(title = "Service Portal BFF", version = "v1",
+               description = "Backend-for-Frontend: flows, execuções, menu, auth"),
+  servers = @Server(url = "http://localhost:8081")
+)
+```
+
+**Anotações por controller**
+- `FlowProxyController`: `@Tag(name = "Flows")`, `@Operation` nos CRUD + executions
+- `BffMenuController`: `@Tag(name = "Menu")`
+- `AuthConfigController`: `@Tag(name = "Auth")`
+- `LoginController`: `@Tag(name = "Auth")`
+
+**Testes**
+- Adicionar caso em `SecurityConfigIT`: `GET /v3/api-docs` retorna 200 sem `Authorization`
+
+**URL de acesso:** `http://localhost:8081/swagger-ui.html`
+
+---
+
+#### Manager (Kotlin — porta 8082)
+
+**`build.gradle.kts`**
+- Adicionar `implementation("org.springdoc:springdoc-openapi-starter-webmvc-ui:2.8.x")`
+- Adicionar exclusão no JaCoCo (`coverageExclusions`): `"com/serviceportal/manager/config/OpenApiConfig*"`
+
+**`application.yml`**
+```yaml
+springdoc:
+  swagger-ui:
+    path: /swagger-ui.html
+  api-docs:
+    path: /v3/api-docs
+```
+
+**`SecurityConfig.kt`** (ou equivalente)
+- Liberar `/swagger-ui/**`, `/swagger-ui.html`, `/v3/api-docs/**` no filtro JWT
+
+**Configuração global** (`OpenApiConfig.kt`)
+```kotlin
+@OpenAPIDefinition(
+  info = Info(title = "Service Portal Manager", version = "v1",
+              description = "CRUD de flows (YAML + SemVer), integrations, contracts, validations"),
+  servers = [Server(url = "http://localhost:8082")]
+)
+```
+
+**Anotações por controller**
+- `FlowController`: `@Tag(name = "Flows")`, `@Operation` por endpoint incluindo o novo `/examples`
+- `IntegrationController`, `ContractController`, `ValidationController`: `@Tag` respectivos
+- `AuthController` (se existir): `@Tag(name = "Auth")`
+
+**Testes**
+- `SecurityConfigIT.kt`: adicionar caso `GET /v3/api-docs` retorna 200 sem token
+
+**URL de acesso:** `http://localhost:8082/swagger-ui.html`
+
+---
+
+## Sessão mais recente — CONCLUÍDA ✅ (S14)
+
+> Endpoint de exemplo de payload por flow: `GET /manager/flows/{flowId}/versions/{version}/examples` gera JSON de exemplo a partir dos campos do contrato; BFF proxia; FlowManager exibe tabela do contrato e pré-popula o textarea de execução.
+
+### O que foi feito
+
+- **Manager** — `YamlValidationService.extractContractFields()`: parseia `flow.contract.fields` do YAML e converte cada entrada no tipo `ContractField`; `FlowDocumentService.getExample()`: gera `Map<String, Any?>` com valores por tipo (`STRING→"exemplo"`, `INTEGER→0`, `BOOLEAN→false`, `ARRAY→[]`, `OBJECT→{}`); `FlowController`: `GET /{flowId}/versions/{version}/examples` → `FlowExampleDto { example, fields }`. Commit `c8d174b`
+- **BFF** — `ManagerClient.getFlowExample()` + `FlowProxyController`: `GET /bff/flows/{flowId}/versions/{version}/examples` proxia para o Manager. Commit `f3ff021`
+- **Frontend** — `FlowExample` em `types/index.ts`; `bff.flows.getExample()` em `api/bff.ts`; `FlowManager.tsx`: `openExecute(flow)` busca o exemplo assincronamente ao entrar na view de execução, pré-popula `execPayload` com o JSON formatado e armazena `exampleFields`; execute view exibe tabela "Contrato de entrada" (campo | tipo | obrigatório) quando `exampleFields.length > 0`; `FlowManager.css`: estilos `.fm-contract-ref`. **87 testes, 0 falhas**. Commit `8d18d8f`
+
+---
+
+## Sessão anterior — CONCLUÍDA ✅ (S13)
 
 > Unificação de layout: design system compartilhado entre FlowManager e ResourceManager — sistema `.btn`, badges de versão/status, tabela card com shadow, clique em linha e tipagem monospace de IDs.
 
