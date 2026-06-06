@@ -584,29 +584,53 @@ services:
 
   # ---------------------------------------------------------------------------
   # Prometheus — Coleta de métricas do Actuator
+  # UI: http://localhost:9090
   # ---------------------------------------------------------------------------
-  # prometheus:
-  #   image: prom/prometheus:latest
-  #   container_name: portal-prometheus
-  #   volumes:
-  #     - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
-  #   ports:
-  #     - "9090:9090"
-  #   networks:
-  #     - portal
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: portal-prometheus
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:9090/-/healthy || exit 1"]
+      start_period: 10s
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    ports:
+      - "${PROMETHEUS_PORT:-9090}:9090"
+    networks:
+      - portal
 
   # ---------------------------------------------------------------------------
   # Grafana — Visualização gráfica das métricas
+  # UI: http://localhost:3000  |  login: admin / admin
+  # Dashboard provisionado automaticamente: "Service Portal"
   # ---------------------------------------------------------------------------
-  # grafana:
-  #   image: grafana/grafana:latest
-  #   container_name: portal-grafana
-  #   ports:
-  #     - "3000:3000"
-  #   environment:
-  #     - GF_SECURITY_ADMIN_PASSWORD=admin
-  #   networks:
-  #     - portal
+  grafana:
+    image: grafana/grafana:latest
+    container_name: portal-grafana
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:3000/api/health || exit 1"]
+      start_period: 20s
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+    environment:
+      GF_SECURITY_ADMIN_USER:     ${GRAFANA_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD:-admin}
+    ports:
+      - "${GRAFANA_PORT:-3000}:3000"
+    depends_on:
+      prometheus:
+        condition: service_started
+    networks:
+      - portal
 
   # ---------------------------------------------------------------------------
   # Spring Boot Admin — Gerenciamento visual das aplicações Spring

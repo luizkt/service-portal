@@ -116,6 +116,7 @@ Manager (Kotlin, :8082) — dono da collection `workflows` (após migração fas
 | **Melhoria de logs: agrupamento por execução de flow (MDC/Tracing)** | Orquestrador | ✅ CONCLUÍDO (S8) | `ExecutionMdcFilter` (OncePerRequestFilter): captura/gera `executionId` via `X-Execution-Id`; MDC com `executionId`+`flowId`+`version`; propagação manual para Virtual Threads (v2); `X-Execution-Id` nos headers WebClient; `logback-spring.xml` com padrão MDC; 95 testes, 0 falhas |
 | **Monitoramento Avançado: Spring Boot Admin** | Todos os serviços | ✅ CONCLUÍDO (S9) | Novo módulo `service-portal-admin` (SBA Server 3.4.0 + Spring Security basic auth + form login); `spring-boot-admin-starter-client` em Orchestrator, BFF e Manager; actuator expandido (`threaddump`, `heapdump`, `loggers`, `env`, `beans`, `caches`); `/actuator/**` público em todos os SecurityConfig; `application-docker.yml` com `service-base-url` por serviço; docker-compose ativado na porta 8085 com healthcheck e `depends_on` nos 3 clients |
 | **Tracing Distribuído: Jaeger + OpenTelemetry** | Todos os serviços | ✅ CONCLUÍDO (S10) | `jaegertracing/all-in-one` ativado no docker-compose (porta 16686 UI + 4318 OTLP HTTP); `micrometer-tracing-bridge-otel` + `opentelemetry-exporter-otlp` nos 3 serviços; 100% sampling em dev; `WebClient.Builder` injetado (BFF + Orchestrator) e `RestClient.Builder` injetado (Manager) para propagação automática do `traceparent` em saídas HTTP; `io.opentelemetry.context.Context` propagado nas Virtual Threads do `OrchestrationV2Service` |
+| **Dashboard Grafana + Prometheus** | Todos os serviços + Infra | ✅ CONCLUÍDO (S11) | `micrometer-registry-prometheus` nos 3 serviços; `/actuator/prometheus` exposto; histogramas HTTP habilitados (`percentiles-histogram`); `prometheus.yml` com scrape dos 3 serviços; Grafana com provisioning automático (datasource + dashboard); dashboard "Service Portal" com 4 seções (Infra, RPM, Latência, Status) + variável `$service`; exportado em `docs/monitoring/dashboard.json` |
 
 ---
 
@@ -448,20 +449,47 @@ docker compose -f docker-compose-service-portal.yml up -d
 
 #### ~~Tracing Distribuído: Jaeger (OpenTelemetry)~~ ✅ CONCLUÍDO (S10)
 
-#### Monitoramento: Dashboard Grafana
-- Configurar `prometheus.yml` para realizar o scrape de todos os serviços (BFF, Manager, Orchestrator).
-- Criar Dashboard no Grafana com filtro por variável `$service`.
-- Implementar painéis de Infra: CPU, Memória e Disco.
-- Implementar painéis de Aplicação: RPM (Requests per Minute).
-- Implementar painéis de Latência: Média, P95 e P99.
-- Implementar painéis de Status: Sucesso (2xx) vs Falhas (4xx/5xx).
-- Exportar o JSON do dashboard para o repositório (`docs/monitoring/dashboard.json`).
+#### ~~Monitoramento: Dashboard Grafana~~ ✅ CONCLUÍDO (S11)
+- ~~Configurar `prometheus.yml` para realizar o scrape de todos os serviços (BFF, Manager, Orchestrator).~~
+- ~~Criar Dashboard no Grafana com filtro por variável `$service`.~~
+- ~~Implementar painéis de Infra: CPU, Memória e Disco.~~
+- ~~Implementar painéis de Aplicação: RPM (Requests per Minute).~~
+- ~~Implementar painéis de Latência: Média, P95 e P99.~~
+- ~~Implementar painéis de Status: Sucesso (2xx) vs Falhas (4xx/5xx).~~
+- ~~Exportar o JSON do dashboard para o repositório (`docs/monitoring/dashboard.json`).~~
 
 (nenhum item pendente neste componente)
 
 ---
 
-## Sessão mais recente — CONCLUÍDA ✅ (S10)
+## Sessão mais recente — CONCLUÍDA ✅ (S11)
+
+> Dashboard Grafana + Prometheus: coleta de métricas Micrometer nos 3 serviços, dashboard provisionado automaticamente com painéis de Infra, RPM, Latência (Média/P95/P99) e Status HTTP (2xx/4xx/5xx), filtrado por variável `$service`.
+
+### O que foi feito
+
+- **`micrometer-registry-prometheus`** adicionado como `runtimeOnly` nos 3 `build.gradle.kts` (versão gerenciada pelo Spring Boot BOM)
+- **`/actuator/prometheus`** adicionado ao `management.endpoints.web.exposure.include` nos 3 `application.yml`
+- **Histogramas HTTP** habilitados via `management.metrics.distribution.percentiles-histogram.http.server.requests: true` nos 3 serviços — necessário para `histogram_quantile()` (P95/P99 corretos no Grafana)
+- **`prometheus/prometheus.yml`** configurado com scrape jobs para `generic-orchestrator` (:8080), `service-portal-bff` (:8081) e `service-portal-manager` (:8082) via `/actuator/prometheus`
+- **`grafana/provisioning/datasources/prometheus.yml`** — DataSource Prometheus (proxy, isDefault, timeInterval 15s)
+- **`grafana/provisioning/dashboards/default.yml`** — Dashboard provider apontando para `/var/lib/grafana/dashboards`
+- **`grafana/dashboards/service-portal.json`** — Dashboard "Service Portal" com 4 seções e variável `$service` (dropdown via `label_values(up, job)`):
+  - **Infra**: CPU gauge (thresholds 60%/80%), Memória Heap timeseries (used vs max), Non-Heap timeseries
+  - **Throughput**: RPM timeseries (`rate(...)[1m] * 60`)
+  - **Latência**: Média, P95 (`histogram_quantile(0.95,...)`), P99 — painéis side-by-side
+  - **Status HTTP**: Sucesso (2xx) vs Falhas (4xx/5xx) timeseries com cores fixas (green/yellow/red) + 3 stat panels (5xx rate, P99 atual, CPU max)
+- **`docs/monitoring/dashboard.json`** — cópia exportada do dashboard para controle de versão
+- **docker-compose** — `prometheus` e `grafana` descomentados e expandidos com healthcheck, volumes, ports configuráveis (`PROMETHEUS_PORT`, `GRAFANA_PORT`, `GRAFANA_USER`, `GRAFANA_PASSWORD`) e `depends_on: prometheus`
+- **Fix colateral**: `prometheus/prometheus.yml` era um diretório root-owned criado pelo Docker em run anterior → removido via container Alpine e recriado como arquivo
+
+**Como usar após `docker compose up`:**
+- Prometheus: `http://localhost:9090` — verificar Status > Targets (todos `UP`)
+- Grafana: `http://localhost:3000` (admin/admin) → dashboard "Service Portal" já disponível sem configuração manual
+
+---
+
+## Sessão anterior — CONCLUÍDA ✅ (S10)
 
 > Tracing Distribuído: Jaeger/OpenTelemetry nos 3 serviços com 100% sampling, propagação W3C `traceparent` em saídas HTTP e contexto OTel nas Virtual Threads do Orchestrator v2.
 
