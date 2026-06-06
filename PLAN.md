@@ -462,7 +462,71 @@ docker compose -f docker-compose-service-portal.yml up -d
 
 ---
 
-## Sessão mais recente — CONCLUÍDA ✅ (S11)
+## Sessão mais recente — CONCLUÍDA ✅ (S13)
+
+> Unificação de layout: design system compartilhado entre FlowManager e ResourceManager — sistema `.btn`, badges de versão/status, tabela card com shadow, clique em linha e tipagem monospace de IDs.
+
+### O que foi feito
+
+- **`src/styles/management.css`** (novo) — design tokens compartilhados extraídos do FlowManager:
+  - Sistema `.btn` completo (primary, ghost, secondary, danger, sm, disabled)
+  - `.mgmt-badge` — badge de versão (pílula roxa, idêntica ao `fm-badge`)
+  - `.mgmt-status`, `--active` (verde), `--inactive` (vermelho) — badges de status
+  - `.mgmt-id` — fonte monospace roxa para IDs de recursos
+  - `.mgmt-date` — data em cinza 12px
+  - `.mgmt-code` — visualizador de código/JSON/YAML (bg cinza claro, monospace, pre-wrap)
+- **`FlowManager.css`** — bloco `.btn*` removido (agora em `management.css`); sem breaking change no FlowManager.tsx
+- **`FlowManager.tsx`** — `import '../../../styles/management.css'` adicionado antes de `FlowManager.css`
+- **`ResourceManager.tsx`**:
+  - `import '../../../styles/management.css'` adicionado
+  - `rm-btn` / `rm-btn-secondary` → `btn btn-primary` / `btn btn-ghost` em todos os botões
+  - `rm-link` / `rm-link rm-danger` → `btn btn-sm btn-ghost` / `btn btn-sm btn-danger`
+  - ID da tabela: `className="mgmt-id"` (monospace roxo)
+  - Versão: `<span className="mgmt-badge">`
+  - Status: `<span className="mgmt-status mgmt-status--active/inactive">` com label "Ativo"/"Inativo"
+  - Data: `className="mgmt-date"`
+  - Linha da tabela clicável (`rm-table-row`, `onClick → openDetail`) — mesmo padrão do FlowManager
+  - Títulos de views com `rm-form-title`, hints com `rm-form-hint`
+  - JSON no detalhe: `mgmt-code` (unificado com FlowManager)
+- **`ResourceManager.css`** — reescrito com visual card:
+  - Título `rm-title` (22px/700, cor `#1a1a2e` — idêntico ao `fm-title`)
+  - Tabela com `background:#fff; border-radius:10px; box-shadow:0 1px 4px; overflow:hidden`
+  - Cabeçalho da tabela: uppercase, letter-spacing, cor `#888` (igual ao FM)
+  - `rm-table-row:hover → background:#f8f8fc`
+  - `rm-form` com `background:#fff; border-radius:10px; padding:24px; box-shadow`
+  - Textarea com foco roxo (`:focus { border-color:#7c6af7 }`)
+  - Removidos: `.rm-btn`, `.rm-btn-secondary`, `.rm-link`, `.rm-danger`, `.rm-actions` simples
+- **`ResourceManager.test.tsx`** — testes atualizados: `getByText('Detalhe')` → `getByText('validate-client')` (clique na linha), `getByText('…v1')` → `getByRole('heading', { level:3, name:/validate-client/ })`
+- **87 testes, 0 falhas**
+
+---
+
+## Sessão anterior — CONCLUÍDA ✅ (S12)
+
+> Edit Flow Modular: botão "Editar" no ResourceManager com pré-população de JSON, bump de versão sequencial via `PUT`, controle de `canWrite` por grupo e 7 testes de componente.
+
+### O que foi feito
+
+- **`ResourceManager.tsx`** — adicionada view `'edit'`:
+  - Novo estado `editJson` (conteúdo do textarea pré-populado com `JSON.stringify(selected)`)
+  - `openEdit()` — preenche `editJson` com o item selecionado e transita para `'edit'`
+  - `handleUpdate()` — chama `api.update(id, version, body)`, recarrega a lista e volta para `'list'`; captura erros (JSON inválido, 400 do backend)
+  - "Editar" no cabeçalho da view `detail` — visível apenas quando `canWrite === true`
+  - View `edit`: textarea pré-populada + aviso âmbar "nova versão será criada / ID não pode ser alterado" + botões "Salvar nova versão" e "Cancelar" (volta para `detail`)
+- **`ResourceManager.css`** — estilos `.rm-detail-header` (flex space-between para alinhar título + botão Editar) e `.rm-edit-note` (aviso âmbar `#fef3c7`)
+- **`ResourceManager/__tests__/ResourceManager.test.tsx`** — 7 novos testes de componente (primeiros testes de componente do projeto):
+  - Botão "Editar" visível quando `canWrite=true`
+  - Botão "Editar" oculto quando `canWrite=false`
+  - View de edição abre pré-populada com o JSON do item
+  - `api.update` chamado com id/version corretos ao salvar
+  - "Cancelar" retorna para view `detail`
+  - Erro de API exibido no `rm-error`
+  - Erro de JSON inválido exibido sem chamar `api.update`
+- **87 testes, 0 falhas**
+
+---
+
+## Sessão anterior — CONCLUÍDA ✅ (S11)
 
 > Dashboard Grafana + Prometheus: coleta de métricas Micrometer nos 3 serviços, dashboard provisionado automaticamente com painéis de Infra, RPM, Latência (Média/P95/P99) e Status HTTP (2xx/4xx/5xx), filtrado por variável `$service`.
 
