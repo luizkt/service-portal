@@ -183,7 +183,7 @@ Os `AGENTS.md` de BFF, Manager e Frontend estão modificados e não commitados n
 ## Pontos em aberto
 
 - O hook só vale em clones com `git config core.hooksPath .githooks`. Esse ajuste é local e não vai no commit. Avaliar um passo de instalação (script ou CI que roda `repo-index.py check`).
-- O `repo-index.py` está copiado em 5 skills e em `scripts/`. A fonte é `scripts/repo-index.py`. Ao mudar o script, recopiar nas 5 skills.
+- O `repo-index.py` está copiado em 5 skills e em `scripts/`. A fonte é `scripts/repo-index.py`. Depois de mudar o script, rode `scripts/sync-skill-script.sh` (copia e roda o `check` nos 5) e commite a cópia em cada componente que mudar. `scripts/sync-skill-script.sh --verify` só compara e sai com 1 se alguma cópia difere: serve para CI.
 - Suporte a TypeScript (feito): `repo-index.py` reconhece o layout `src/` (sem `src/main`), separa testes (`__tests__`, `*.test.*`, `*.spec.*`) e `src/test/`, gera `gen:size` com arquivos, testes e casos, resolve caminhos relativos a `src/` e extensões `.ts` e `.tsx`, e faz drift e `inventory` em TypeScript. O `AGENTS.md` do Frontend passou a usar o bloco `gen:size`.
 - Um único `AGENTS.md` por componente, ou separar `INDEX.md` gerado de `AGENTS.md` manual? O piloto usa um arquivo só.
 - Onde o `check` roda: hook de pre-commit ou CI. `generic-orchestrator` é um repositório git próprio, então o script precisa ser copiado ou versionado em um lugar comum.
