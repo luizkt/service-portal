@@ -29,6 +29,18 @@ Usuário
 | [service-portal-manager/](service-portal-manager/)   | Kotlin 2.0 + Spring Boot 3.4.5 + MongoDB        | 8082     |
 | [service-portal-frontend/](service-portal-frontend/) | React 18 + TypeScript + Vite 5                  | 5173 / 80 |
 
+## Status do build
+
+Build e testes na branch `feature/rag-indexing` (GitHub Actions). Cada repositório roda `./gradlew build` com gate JaCoCo (ou `npm run build` e `npm run coverage` no frontend) e valida o índice `AGENTS.md`. Ao mergear a branch, troque `branch=feature/rag-indexing` por `branch=main` nos badges.
+
+| Repositório | Status |
+|---|---|
+| [service-portal (inclui service-portal-admin)](https://github.com/luizkt/service-portal) | [![CI](https://github.com/luizkt/service-portal/actions/workflows/ci.yml/badge.svg?branch=feature/rag-indexing)](https://github.com/luizkt/service-portal/actions/workflows/ci.yml?query=branch%3Afeature%2Frag-indexing) |
+| [generic-orchestrator](https://github.com/luizkt/generic-orchestrator) | [![CI](https://github.com/luizkt/generic-orchestrator/actions/workflows/ci.yml/badge.svg?branch=feature/rag-indexing)](https://github.com/luizkt/generic-orchestrator/actions/workflows/ci.yml?query=branch%3Afeature%2Frag-indexing) |
+| [service-portal-bff](https://github.com/luizkt/service-portal-bff) | [![CI](https://github.com/luizkt/service-portal-bff/actions/workflows/ci.yml/badge.svg?branch=feature/rag-indexing)](https://github.com/luizkt/service-portal-bff/actions/workflows/ci.yml?query=branch%3Afeature%2Frag-indexing) |
+| [service-portal-manager](https://github.com/luizkt/service-portal-manager) | [![CI](https://github.com/luizkt/service-portal-manager/actions/workflows/ci.yml/badge.svg?branch=feature/rag-indexing)](https://github.com/luizkt/service-portal-manager/actions/workflows/ci.yml?query=branch%3Afeature%2Frag-indexing) |
+| [service-portal-frontend](https://github.com/luizkt/service-portal-frontend) | [![CI](https://github.com/luizkt/service-portal-frontend/actions/workflows/ci.yml/badge.svg?branch=feature/rag-indexing)](https://github.com/luizkt/service-portal-frontend/actions/workflows/ci.yml?query=branch%3Afeature%2Frag-indexing) |
+
 ## Infraestrutura local
 
 | Serviço     | Imagem                          | Função                                  |

@@ -1,0 +1,49 @@
+name: CI
+
+on:
+  push:
+    branches: [main, 'feature/**']
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  admin:
+    name: admin build e testes
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: service-portal-admin
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          build-root-directory: service-portal-admin
+
+      - name: Build, Spotless, testes
+        run: |
+          chmod +x ./gradlew
+          ./gradlew build --no-daemon
+
+  agents-index:
+    name: índice AGENTS.md e script
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: check do admin
+        run: python3 scripts/repo-index.py check service-portal-admin
+      - name: cópias do script iguais à fonte
+        run: scripts/sync-skill-script.sh --verify

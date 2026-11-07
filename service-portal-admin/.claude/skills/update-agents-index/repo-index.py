@@ -279,7 +279,10 @@ def cmd_check(root: Path, args) -> int:
 
     for tok in sorted(candidate_paths(text)):
         if not resolve(tok, root, rroot, files, base):
-            errors.append(f"caminho citado não existe: {tok}")
+            if tok.startswith("../"):  # fora do repositório: não dá para validar em um clone isolado
+                warnings.append(f"caminho fora do repositório não verificado: {tok}")
+            else:
+                errors.append(f"caminho citado não existe: {tok}")
 
     for name, value in gen_blocks(root, files).items():
         m = re.search(GEN_RE.format(name=name), text, flags=re.S)
