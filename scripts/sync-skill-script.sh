@@ -1,12 +1,16 @@
 #!/usr/bin/env bash
-# Sincroniza scripts/repo-index.py (fonte) com a cópia dentro da skill de cada componente.
+# Sincroniza duas fontes do monorepo com as cópias dos componentes:
+#   - scripts/repo-index.py -> .claude/skills/update-agents-index/repo-index.py nas 5 skills
+#   - license-header.txt    -> license-header.txt na raiz de generic-orchestrator,
+#                              service-portal-bff e service-portal-manager
+#                              (service-portal-admin usa ../license-header.txt, sem cópia)
 #
 # Uso:
-#   scripts/sync-skill-script.sh           copia a fonte para as 5 skills e roda o check em cada uma
+#   scripts/sync-skill-script.sh           copia as fontes, roda o check do repo-index em cada componente
 #   scripts/sync-skill-script.sh --verify  não altera nada; sai com 1 se alguma cópia difere da fonte
 #
-# Depois de sincronizar, cada componente tem uma mudança a commitar em
-# .claude/skills/update-agents-index/repo-index.py (o script lista quais).
+# Diretório de componente ausente (ex.: CI do monorepo) vira "pulado". Códigos: 0 ok, 1 drift, 2 uso/erro.
+# Depois de sincronizar, cada componente tem uma mudança a commitar (o script lista quais).
 set -u
 
 root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
@@ -20,6 +24,14 @@ components=(
   service-portal-frontend
 )
 
+hsrc="$root/license-header.txt"
+hrel="license-header.txt"
+header_components=(
+  generic-orchestrator
+  service-portal-bff
+  service-portal-manager
+)
+
 mode=sync
 case "${1:-}" in
   "") ;;
@@ -28,6 +40,7 @@ case "${1:-}" in
 esac
 
 [ -f "$src" ] || { echo "erro: fonte não encontrada: $src" >&2; exit 2; }
+[ -f "$hsrc" ] || { echo "erro: fonte não encontrada: $hsrc" >&2; exit 2; }
 
 status=0
 changed=()
@@ -52,6 +65,26 @@ for c in "${components[@]}"; do
   changed+=("$c")
 done
 
+for c in "${header_components[@]}"; do
+  dest="$root/$c/$hrel"
+  if [ ! -d "$root/$c" ]; then
+    echo "pulado  $c/$hrel (diretório não existe)"
+    continue
+  fi
+  if [ -f "$dest" ] && cmp -s "$hsrc" "$dest"; then
+    echo "igual   $c/$hrel"
+    continue
+  fi
+  if [ "$mode" = verify ]; then
+    echo "DIFERE  $c/$hrel"
+    status=1
+    continue
+  fi
+  cp "$hsrc" "$dest"
+  echo "copiado $c/$hrel"
+  changed+=("$c/$hrel")
+done
+
 if [ "$mode" = verify ]; then
   [ "$status" -eq 0 ] && echo "ok: todas as cópias iguais à fonte" || echo "rode scripts/sync-skill-script.sh" >&2
   exit "$status"
@@ -65,7 +98,7 @@ done
 
 if [ "${#changed[@]}" -gt 0 ]; then
   echo
-  echo "Commite a cópia nestes componentes (${rel}):"
+  echo "Commite a cópia nestes componentes:"
   printf '  %s\n' "${changed[@]}"
 fi
 exit "$status"
