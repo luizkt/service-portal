@@ -1,0 +1,43 @@
+#!/usr/bin/env bash
+# Pre-commit: mantém o AGENTS.md em sincronia com o código.
+# 1. Se código de produção entrou no commit sem o AGENTS.md, bloqueia.
+# 2. Roda `repo-index.py check`; bloqueia em ERRO (caminho citado inexistente, bloco gerado velho).
+# Mudança que não afeta o índice: AGENTS_INDEX_OK=1 git commit ...
+# Instalação (uma vez por clone): git config core.hooksPath .githooks
+set -u
+top=$(git rev-parse --show-toplevel)
+cd "$top" || exit 0
+
+PREFIX="service-portal-admin"        # vazio: o repositório é o próprio componente
+SRC_RE='^src/main/'        # arquivos que contam como código de produção
+EXCLUDE_RE='^$^'
+SCRIPT="service-portal-admin/.claude/skills/update-agents-index/repo-index.py"
+TARGET="service-portal-admin"
+
+staged=$(git diff --cached --name-only --diff-filter=ACMRD)
+[ -z "$staged" ] && exit 0
+if [ -n "$PREFIX" ]; then
+  staged=$(printf '%s\n' "$staged" | grep "^${PREFIX}/" || true)
+  [ -z "$staged" ] && exit 0
+  rel() { printf '%s\n' "$staged" | sed "s#^${PREFIX}/##"; }
+else
+  rel() { printf '%s\n' "$staged"; }
+fi
+
+src_changed=$(rel | grep -E "$SRC_RE" | grep -Ev "$EXCLUDE_RE" || true)
+index_staged=$(rel | grep -x 'AGENTS.md' || true)
+
+if [ -n "$src_changed" ] && [ -z "$index_staged" ] && [ "${AGENTS_INDEX_OK:-0}" != "1" ]; then
+  echo "pre-commit: código de produção mudou e o AGENTS.md não está no commit." >&2
+  echo "  Use a skill update-agents-index, depois: git add ${PREFIX:+$PREFIX/}AGENTS.md" >&2
+  echo "  Se o índice não precisa mudar: AGENTS_INDEX_OK=1 git commit ..." >&2
+  printf '%s\n' "$src_changed" | head -5 | sed 's/^/    /' >&2
+  exit 1
+fi
+
+if ! out=$(python3 "$SCRIPT" check "$TARGET" 2>&1); then
+  echo "$out" >&2
+  echo "pre-commit: repo-index.py check falhou. Corrija o AGENTS.md." >&2
+  exit 1
+fi
+exit 0
