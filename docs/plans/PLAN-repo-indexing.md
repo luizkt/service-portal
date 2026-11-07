@@ -49,7 +49,7 @@ Referência: `service-portal-admin/AGENTS.md`.
 | F4 | `AGENTS.md` no formato curto em Orchestrator, BFF, Manager e Frontend (reescritos por subagentes em paralelo, fatos verificados no código) | feito |
 | F4b | Skill `update-agents-index` em cada componente (`.claude/skills/update-agents-index/` com `SKILL.md` e cópia de `repo-index.py`): atualiza o `AGENTS.md` a cada feature ou correção, antes do commit | feito |
 | F4c | Hook `.githooks/pre-commit` e `CLAUDE.md` em cada componente: bloqueia commit com código de produção sem `AGENTS.md` ou com `check` em erro; `CLAUDE.md` manda ler o índice e usar a skill | feito |
-| F5 | Índice raiz (`docs/MAP.md`) apontando para o `AGENTS.md` de cada componente com 1 linha cada | pendente |
+| F5 | Índice raiz em `docs/MAP.md`: uma linha por componente apontando para o `AGENTS.md`, mais a seção de manutenção | feito |
 | F6 | Avaliar RAG só se algum componente passar do limite de tokens | opcional |
 
 ## Como medir
