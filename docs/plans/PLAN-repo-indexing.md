@@ -49,6 +49,7 @@ Referência: `service-portal-admin/AGENTS.md`.
 | F4 | `AGENTS.md` no formato curto em Orchestrator, BFF, Manager e Frontend (reescritos por subagentes em paralelo, fatos verificados no código) | feito |
 | F4b | Skill `update-agents-index` em cada componente (`.claude/skills/update-agents-index/` com `SKILL.md` e cópia de `repo-index.py`): atualiza o `AGENTS.md` a cada feature ou correção, antes do commit | feito |
 | F4c | Hook `.githooks/pre-commit` e `CLAUDE.md` em cada componente: bloqueia commit com código de produção sem `AGENTS.md` ou com `check` em erro; `CLAUDE.md` manda ler o índice e usar a skill | feito |
+| F4d | Job `open-pr` no CI de cada repositório: depois de build e testes verdes em `feature/**`, abre o PR para a `main` se ainda não existir (`gh` do runner com `GITHUB_TOKEN`) | feito |
 | F5 | Índice raiz em `docs/MAP.md`: uma linha por componente apontando para o `AGENTS.md`, mais a seção de manutenção | feito |
 | F6 | Avaliar RAG só se algum componente passar do limite de tokens | opcional |
 
@@ -182,6 +183,7 @@ Os `AGENTS.md` de BFF, Manager e Frontend estão modificados e não commitados n
 
 ## Pontos em aberto
 
+- O job `open-pr` só funciona com a opção **Settings > Actions > General > Workflow permissions > Allow GitHub Actions to create and approve pull requests** habilitada em cada repositório. Sem ela o job termina com aviso e o PR não é criado. PR criado com `GITHUB_TOKEN` não dispara outros workflows; o CI já rodou no push.
 - O hook só vale em clones com `core.hooksPath` apontando para `.githooks`, e isso é configuração local. `scripts/install-hooks.sh` ativa nos 5 repositórios de uma vez (`--status` só mostra o estado e sai com 1 se algum estiver desligado). Rode uma vez por clone novo.
 - CI: nenhum dos 5 repositórios tem pipeline (só remotos do GitHub). Quando houver, ligar `scripts/sync-skill-script.sh --verify` e `repo-index.py check` como passos, porque o CI não depende da configuração local de quem commita.
 - O `repo-index.py` está copiado em 5 skills e em `scripts/`. A fonte é `scripts/repo-index.py`. Depois de mudar o script, rode `scripts/sync-skill-script.sh` (copia e roda o `check` nos 5) e commite a cópia em cada componente que mudar. `scripts/sync-skill-script.sh --verify` só compara e sai com 1 se alguma cópia difere: serve para CI.

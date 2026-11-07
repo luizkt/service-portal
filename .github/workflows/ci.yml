@@ -47,3 +47,35 @@ jobs:
         run: python3 scripts/repo-index.py check service-portal-admin
       - name: cópias do script iguais à fonte
         run: scripts/sync-skill-script.sh --verify
+
+  open-pr:
+    name: abrir PR para main
+    needs: [admin, agents-index]
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/heads/feature/')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      BRANCH: ${{ github.ref_name }}
+      COMMIT_MSG: ${{ github.event.head_commit.message }}
+    steps:
+      - name: Abrir PR para main, se ainda não existir
+        run: |
+          existing=$(gh pr list --head "$BRANCH" --base main --state open --json number --jq 'length')
+          if [ "$existing" != "0" ]; then
+            echo "PR já aberto para $BRANCH."
+            exit 0
+          fi
+          title=$(printf '%s' "$COMMIT_MSG" | head -n 1)
+          {
+            printf '%s\n\n' "PR aberto automaticamente pelo CI depois de build e testes verdes em \`$BRANCH\`."
+            printf '%s\n\n' "Último commit:"
+            printf '%s\n' "$COMMIT_MSG"
+          } > body.md
+          if ! gh pr create --base main --head "$BRANCH" --title "$title" --body-file body.md; then
+            echo "::warning::Não foi possível abrir o PR. Verifique em Settings > Actions > General se 'Allow GitHub Actions to create and approve pull requests' está habilitado."
+          fi
