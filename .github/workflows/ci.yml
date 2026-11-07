@@ -21,28 +21,56 @@ jobs:
       run:
         working-directory: service-portal-admin
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@v6
         with:
           distribution: temurin
           java-version: '21'
 
-      - uses: gradle/actions/setup-gradle@v4
-        with:
-          build-root-directory: service-portal-admin
+      - uses: gradle/actions/setup-gradle@v6
 
-      - name: Build, Spotless, testes
+      - name: Build, Spotless e testes (gradle build inclui test)
         run: |
           chmod +x ./gradlew
           ./gradlew build --no-daemon
+
+  # Roda em paralelo com o build: o Dockerfile compila dentro da imagem
+  # (gradle bootJar), então não depende da saída do job admin.
+  docker-build:
+    name: admin docker build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: docker/setup-buildx-action@v4
+
+      - uses: docker/build-push-action@v7
+        with:
+          context: service-portal-admin
+          push: false
+          load: true
+          tags: service-portal-admin:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: smoke test da imagem
+        run: |
+          docker run -d --name admin -p 8085:8080 service-portal-admin:ci
+          for i in $(seq 1 30); do
+            curl -fs http://localhost:8085/actuator/health && exit 0
+            sleep 2
+          done
+          docker logs admin
+          exit 1
 
   agents-index:
     name: índice AGENTS.md e script
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: check do admin
         run: python3 scripts/repo-index.py check service-portal-admin
       - name: cópias do script iguais à fonte
