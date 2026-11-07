@@ -1,5 +1,7 @@
 # service-portal
 
+[![CI](https://github.com/luizkt/service-portal/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/luizkt/service-portal/actions/workflows/ci.yml?query=branch%3Amain)
+
 Portal extensível com arquitetura em camadas e **Server Driven UI** — o BFF
 controla menu e schemas; o frontend não tem regras de negócio. Workflows são
 declarados em YAML, gerenciados pelo Manager e executados pelo Orchestrator
