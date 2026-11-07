@@ -18,7 +18,7 @@ java {
 
 repositories { mavenCentral() }
 
-extra["sbaVersion"] = "3.4.0"
+extra["sbaVersion"] = "3.4.7"
 
 dependencies {
     implementation("de.codecentric:spring-boot-admin-starter-server:${property("sbaVersion")}")
