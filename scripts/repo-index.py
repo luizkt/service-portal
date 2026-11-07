@@ -28,7 +28,9 @@ PATH_EXT = SOURCE_EXT | {".yml", ".yaml", ".xml", ".md", ".kts", ".sh", ".json",
 BUILD_FILES = {
     "build.gradle.kts", "build.gradle", "pom.xml", "package.json", "pyproject.toml",
     "go.mod", "Cargo.toml", "Dockerfile", "docker-compose.yml", "settings.gradle.kts",
+    "vite.config.ts", "vitest.config.ts", "tsconfig.json",
 }
+TEST_RE = re.compile(r"(^|/)__tests__/|\.(test|spec)\.[jt]sx?$")
 ENTRY_NAMES = {"main", "index", "app", "server", "Main", "App"}
 DEFAULT_MAX_TOKENS = 3500
 
@@ -61,8 +63,37 @@ def is_source(rel: str, section: str) -> bool:
     return rel.startswith(section + "/") and Path(rel).suffix in SOURCE_EXT
 
 
+def layout(files: list[str]) -> str:
+    """`jvm` (src/main), `src` (TypeScript/JS sob src/) ou `none`."""
+    if any(is_source(f, "src/main") for f in files):
+        return "jvm"
+    if any(is_source(f, "src") for f in files):
+        return "src"
+    return "none"
+
+
+def prod_files(files: list[str]) -> list[str]:
+    lay = layout(files)
+    if lay == "jvm":
+        return [f for f in files if is_source(f, "src/main")]
+    if lay == "src":
+        return [f for f in files if is_source(f, "src") and not TEST_RE.search(f) and not f.startswith("src/test/")]
+    return []
+
+
+def test_files(files: list[str]) -> list[str]:
+    lay = layout(files)
+    if lay == "jvm":
+        return [f for f in files if is_source(f, "src/test")]
+    if lay == "src":
+        return [f for f in files if is_source(f, "src") and TEST_RE.search(f)]
+    return []
+
+
 def java_base(files: list[str]) -> str:
     """Diretório base dos pacotes: desce enquanto há um único subdiretório."""
+    if layout(files) == "src":
+        return "src"
     src = [f for f in files if f.startswith("src/main/") and Path(f).suffix in SOURCE_EXT]
     if not src:
         return ""
@@ -89,15 +120,16 @@ def cmd_inventory(root: Path, _args) -> int:
         if Path(f).name in BUILD_FILES or re.match(r"src/main/resources/[^/]+\.(ya?ml|properties)$", f):
             print(f"- {f} ({count_lines(root / f)} linhas)")
     print("\n## Possíveis entry points")
+    prod = set(prod_files(files))
     for f in files:
         p = Path(f)
-        if f.startswith("src/main/") and p.suffix in SOURCE_EXT and (p.stem.endswith("Application") or p.stem in ENTRY_NAMES):
+        if f in prod and (p.stem.endswith("Application") or p.stem in ENTRY_NAMES):
             print(f"- {f}")
     base = java_base(files)
     print(f"\n## Código por pacote (base: {base or '.'})")
     groups: dict[str, list[tuple[str, int]]] = defaultdict(list)
     for f in files:
-        if is_source(f, "src/main"):
+        if f in prod:
             rel = f[len(base) + 1:] if base and f.startswith(base + "/") else f
             pkg = str(Path(rel).parent)
             groups[pkg].append((Path(f).stem, count_lines(root / f)))
@@ -106,9 +138,8 @@ def cmd_inventory(root: Path, _args) -> int:
         total = sum(n for _, n in items)
         names = ", ".join(f"{s}({n})" for s, n in sorted(items, key=lambda x: -x[1]))
         print(f"- {pkg}/ [{len(items)} arq, {total} linhas]: {names}")
-    main = sum(1 for f in files if is_source(f, "src/main"))
-    test = sum(1 for f in files if is_source(f, "src/test"))
-    print(f"\n## Tamanho\n- src/main: {main} arquivos de código\n- src/test: {test} arquivos de código")
+    lay = layout(files)
+    print(f"\n## Tamanho (layout: {lay})\n- código de produção: {len(prod)} arquivos\n- testes: {len(test_files(files))} arquivos")
     exts = Counter(Path(f).suffix for f in files if Path(f).suffix)
     print("- extensões: " + ", ".join(f"{e} {n}" for e, n in exts.most_common(6)))
     print("\n## Bugs recorrentes (candidatos a 'Armadilhas')")
@@ -124,10 +155,20 @@ def cmd_inventory(root: Path, _args) -> int:
 
 
 def size_text(root: Path, files: list[str]) -> str:
-    ext = Counter(Path(f).suffix for f in files if is_source(f, "src/main"))
+    if layout(files) == "src":
+        srcs = [f for f in files if is_source(f, "src")]
+        exts = sorted({Path(f).suffix for f in srcs})
+        names = " e ".join(exts) if len(exts) <= 2 else ", ".join(exts[:-1]) + " e " + exts[-1]
+        tests = test_files(files)
+        cases = sum(
+            len(re.findall(r"^\s*(?:it|test)\(", (root / f).read_text(encoding="utf-8", errors="ignore"), re.M))
+            for f in tests
+        )
+        return f"Tamanho: {len(srcs)} arquivos {names} em `src`, dos quais {len(tests)} de teste ({cases} casos)."
+    ext = Counter(Path(f).suffix for f in prod_files(files))
     lang = ext.most_common(1)[0][0] if ext else ""
-    main = sum(1 for f in files if is_source(f, "src/main"))
-    test = sum(1 for f in files if is_source(f, "src/test"))
+    main = len(prod_files(files))
+    test = len(test_files(files))
     return f"Tamanho: {main} arquivos {lang} em `src/main`, {test} em `src/test`."
 
 
@@ -168,7 +209,7 @@ def resolve(token: str, root: Path, rroot: Path, files: list[str], base: str) ->
     if base:
         roots.append(root / base)
     for r in roots:
-        for cand in (token, token + ".java", token + ".kt"):
+        for cand in (token, token + ".java", token + ".kt", token + ".ts", token + ".tsx"):
             if "*" in cand:
                 if any(fnmatch.fnmatch(f, cand) for f in tracked_rel(r, root, files)):
                     return True
@@ -194,9 +235,7 @@ def uncovered_sources(root: Path, files: list[str], base: str, text: str) -> lis
     globs = [t for t in cited if "*" in t]
     cited_stems = {Path(t).stem for t in cited}
     missing = []
-    for f in files:
-        if not is_source(f, "src/main"):
-            continue
+    for f in prod_files(files):
         rel = f[len(base) + 1:] if base and f.startswith(base + "/") else f
         if Path(f).stem in text or Path(f).stem in cited_stems:
             continue
