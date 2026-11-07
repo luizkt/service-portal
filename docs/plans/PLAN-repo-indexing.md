@@ -182,7 +182,8 @@ Os `AGENTS.md` de BFF, Manager e Frontend estão modificados e não commitados n
 
 ## Pontos em aberto
 
-- O hook só vale em clones com `git config core.hooksPath .githooks`. Esse ajuste é local e não vai no commit. Avaliar um passo de instalação (script ou CI que roda `repo-index.py check`).
+- O hook só vale em clones com `core.hooksPath` apontando para `.githooks`, e isso é configuração local. `scripts/install-hooks.sh` ativa nos 5 repositórios de uma vez (`--status` só mostra o estado e sai com 1 se algum estiver desligado). Rode uma vez por clone novo.
+- CI: nenhum dos 5 repositórios tem pipeline (só remotos do GitHub). Quando houver, ligar `scripts/sync-skill-script.sh --verify` e `repo-index.py check` como passos, porque o CI não depende da configuração local de quem commita.
 - O `repo-index.py` está copiado em 5 skills e em `scripts/`. A fonte é `scripts/repo-index.py`. Depois de mudar o script, rode `scripts/sync-skill-script.sh` (copia e roda o `check` nos 5) e commite a cópia em cada componente que mudar. `scripts/sync-skill-script.sh --verify` só compara e sai com 1 se alguma cópia difere: serve para CI.
 - Suporte a TypeScript (feito): `repo-index.py` reconhece o layout `src/` (sem `src/main`), separa testes (`__tests__`, `*.test.*`, `*.spec.*`) e `src/test/`, gera `gen:size` com arquivos, testes e casos, resolve caminhos relativos a `src/` e extensões `.ts` e `.tsx`, e faz drift e `inventory` em TypeScript. O `AGENTS.md` do Frontend passou a usar o bloco `gen:size`.
 - Um único `AGENTS.md` por componente, ou separar `INDEX.md` gerado de `AGENTS.md` manual? O piloto usa um arquivo só.

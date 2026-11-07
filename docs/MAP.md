@@ -44,7 +44,7 @@ Frontend, BFF, Manager e Orchestrator são repositórios git próprios: os links
 ### Manter os índices atualizados
 - Método, medições e decisões: [PLAN-repo-indexing.md](plans/PLAN-repo-indexing.md).
 - Ferramenta: `scripts/repo-index.py` com os comandos `inventory`, `check` e `write`. `scripts/sync-skill-script.sh` copia o script para a skill de cada componente.
-- Em cada componente: skill `update-agents-index` (`.claude/skills/`), `CLAUDE.md` mandando usá-la e hook `.githooks/pre-commit` que bloqueia código de produção sem o `AGENTS.md`. Ative o hook uma vez por clone com `git config core.hooksPath .githooks`.
+- Em cada componente: skill `update-agents-index` (`.claude/skills/`), `CLAUDE.md` mandando usá-la e hook `.githooks/pre-commit` que bloqueia código de produção sem o `AGENTS.md`. Ative os hooks de todos os repositórios uma vez por clone com `scripts/install-hooks.sh`.
 
 ---
 *Última atualização: Novembro 2026*
