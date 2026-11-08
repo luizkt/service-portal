@@ -173,3 +173,42 @@ Também não confirmados: datas de lançamento de 4.0.0 e 4.1.0; as últimas ~28
 | A5 | M3: 4.0.9 | 4 apps | A4 |
 | A6 | M4: 4.1.2 | 4 apps | A5 |
 | A7 | Fechamento: remover o migrator, atualizar `AGENTS.md` e README, tag `boot-4.1.2` | todos | A6 |
+
+## 12. Status de execução (2026-11-08)
+
+Os marcos M1 a M4 foram executados em branches empilhadas, uma por marco e por app, e cada uma passou nos critérios de saída da seção 8. Falta só mergear, na ordem abaixo, e marcar as tags `boot-<versão>`.
+
+| Marco | Branch (em cada app; admin dentro do monorepo) | Base |
+|---|---|---|
+| M1 3.4.5 → 3.4.13 | `feature/boot-3-4-13` | `main` |
+| M2 → 3.5.16 | `feature/boot-3-5` | M1 |
+| Preparo (BFF e admin) | `feature/boot-prep-deprecations` | M2 |
+| M3 → 4.0.9 | `feature/boot-4-0` | M2 (orquestrador e Manager) e preparo (BFF e admin) |
+| M4 → 4.1.2 | `feature/boot-4-1` | M3 |
+
+Versões finais: Boot 4.1.2, Spring Boot Admin 4.1.5, springdoc 3.2.0, Kotlin 2.3.21 (Manager), springmockk 5.0.1, Testcontainers 2 (gerenciado pelo Boot).
+
+Medido em cada marco: build, testes e gate JaCoCo verdes nos 4 apps; `integrationTest` do orquestrador verde; imagens constroem; teste integrado com a stack completa sem falha (M2: 28/34 passam e 0 falham; M3 e M4: 30/34 passam e 0 falham; o resto é pulado pelo próprio script); 43/43 nas verificações de actuator e SBA, com os 3 clientes registrados e UP. Avisos de depreciação: M2 tinha 22 (20 `@MockBean` no BFF e 2 `AntPathRequestMatcher` no admin), zerados no preparo; M3 e M4 compilam sem avisos.
+
+O que quebrou no M3 e como foi resolvido (útil para próximas subidas):
+
+- Starters renomeados: `webmvc`, `webclient` (sem ele não existe `WebClient.Builder`), `kafka`, `security-oauth2-resource-server` e os de teste (`webmvc-test`, `security-test`, `micrometer-metrics-test`). `@AutoConfigureMockMvc` e `@AutoConfigureObservability` mudaram de pacote (a segunda virou `@AutoConfigureMetrics`).
+- Jackson 3: `tools.jackson.*` para `ObjectMapper`, `JsonMapper`, `YAMLMapper` e módulo Kotlin; anotações continuam em `com.fasterxml.jackson.annotation`; `JsonProcessingException` sumiu (`JacksonException` não é checada, então `catch (IOException)` não a pega); `spring.jackson.serialization.write-dates-as-timestamps` virou `spring.jackson.datatype.datetime.write-dates-as-timestamps`. Primitivo ausente ou nulo agora falha: `ContractField.required` ganhou default `false` e um payload de teste do orquestrador que usava nomes antigos foi corrigido.
+- `jjwt-jackson` 0.13 funciona: coexiste com o Jackson 3 desde que `jackson-databind` 2.x esteja no runtime (`runtimeOnly`). Resolve o risco da seção 11.
+- Redis: `JacksonJsonRedisSerializer`; RabbitMQ: `JacksonJsonMessageConverter`.
+- Testcontainers 2: módulos `testcontainers-*`, `org.testcontainers.rabbitmq.RabbitMQContainer`, `org.testcontainers.kafka.ConfluentKafkaContainer`, `LocalStackContainer.withServices("sqs")` e `getEndpoint()`.
+- Mongo: `spring.mongodb.*` no lugar de `spring.data.mongodb.*`; as autoconfigs excluídas nos ITs mudaram de pacote (sem isso o health fica DOWN por timeout).
+- OkHttp: o Boot 4 gerencia o OkHttp 5, mas o MockWebServer 4.12 usa `okhttp3.internal`; os classpaths de teste forçam OkHttp 4.12.
+- Spring Security 7: o `Location` do redirect para `/login` agora é relativo; `Authentication` do `SecurityContext` é anulável (Kotlin exige `!!` ou `?.` nos testes); springmockk 5 e Kotlin 2.2 compilam sem outras mudanças. Kotlin 2.2 pede `-Xannotation-default-target=param-property` para não avisar em `@Value` de construtor.
+- Reason phrase do status 422 passou a ser "Unprocessable Content".
+
+Atenção ao mergear: as branches de login do BFF (`feature/bff-login-hardening`) e as demais que tocam `AuthentikLoginService` usam `JsonProcessingException`; depois do M3 esse trecho precisa seguir o Jackson 3 (remover o `catch` de `JsonProcessingException` e esperar `JacksonException`).
+
+Verificado depois, no Boot 4.1.2 e com as imagens em execução (2026-11-08):
+
+- `SECURITY_STRICT=true` com os segredos padrão: os 4 apps (orquestrador, BFF, Manager e admin) falham na subida em `securityDefaultsGuard` com código de saída 1, e a mensagem cita só os nomes das variáveis, nunca os valores.
+- `SECURITY_STRICT=true` com segredos fortes na stack completa: os 4 containers ficam saudáveis, o SBA registra os 3 clientes UP e nenhum log tem o aviso de defaults inseguros.
+- Login real: `POST /bff/auth/login` contra o Authentik devolveu 200 com `access_token` e `id_token` para um usuário temporário (criado e apagado pela API do Authentik), e o BFF aceitou o token em `/bff/menu` (200, e 401 sem token). Isso cobre o fluxo ROPC do BFF e a validação por JWKS no Boot 4. O `redirect_uri` padrão (`http://localhost:5173/auth/callback`) é aceito pelo provider.
+- Mongo com volume novo (projeto compose separado, removido depois): o `init-mongo.js` semeia as coleções, o Manager lê, cria flow (201), lê o YAML e lista os ativos. O volume antigo já tinha funcionado.
+
+Ainda não verificado: o fluxo PKCE da SPA no browser (a tela de login, o redirect e o callback do frontend).

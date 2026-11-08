@@ -2,7 +2,7 @@ import org.springframework.boot.gradle.tasks.bundling.BootJar
 
 plugins {
     java
-    id("org.springframework.boot") version "4.0.9"
+    id("org.springframework.boot") version "4.1.2"
     id("io.spring.dependency-management") version "1.1.7"
     id("com.diffplug.spotless") version "8.11.0"
 }
@@ -18,7 +18,7 @@ java {
 
 repositories { mavenCentral() }
 
-extra["sbaVersion"] = "4.0.4"
+extra["sbaVersion"] = "4.1.5"
 
 dependencies {
     implementation("de.codecentric:spring-boot-admin-starter-server:${property("sbaVersion")}")
