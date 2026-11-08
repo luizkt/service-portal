@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1
 # ─── Build ────────────────────────────────────────────────────────────────────
-FROM gradle:8.10-jdk21-alpine AS build
+FROM gradle:8.14-jdk21-alpine AS build
 WORKDIR /app
 COPY . .
 RUN --mount=type=cache,target=/root/.gradle \
