@@ -20,7 +20,7 @@ Servidor Spring Boot Admin (SBA) do Service Portal. Painel de monitoramento onde
 | Item | Valor |
 |---|---|
 | Linguagem | Java 21 |
-| Framework | Spring Boot 3.5.16 + `spring-boot-admin-starter-server` 3.5.11 |
+| Framework | Spring Boot 4.0.9 + `spring-boot-admin-starter-server` 4.0.4 |
 | Build | Gradle Kotlin DSL; jar final `service-portal-admin.jar` |
 | Testes | JUnit 5, `spring-boot-starter-test`, `spring-security-test` (MockMvc); `./gradlew test` |
 | Formatação | Spotless (google-java-format AOSP + header de `../license-header.txt`) |
@@ -83,10 +83,11 @@ Servidor Spring Boot Admin (SBA) do Service Portal. Painel de monitoramento onde
 - Matchers com método (`PathPatternRequestMatcher.withDefaults().matcher(HttpMethod.POST, path)`) são parte do contrato de registro: mudar o matcher na atualização do Spring Boot exige rodar `AdminSecurityTest`.
 - Usuário único compartilhado: a mesma credencial serve à UI e ao registro dos clientes (BFF, Manager, Orchestrator).
 - Alterar `SecurityConfig` sem o `ctx` quebra a UI quando há `spring.boot.admin.context-path`.
-- O SBA server roda em modo servlet. Remover `spring-boot-starter-web` causa `ClassNotFoundException` (commit `dcfc3fc`).
+- O SBA server roda em modo servlet. Remover `spring-boot-starter-webmvc` (no Boot 3 era `spring-boot-starter-web`) causa `ClassNotFoundException` (commit `dcfc3fc`).
 - Trocar a senha só no admin faz os clientes falharem no registro: atualize `SBA_USERNAME`/`SBA_PASSWORD` em todos os componentes.
 - Todo arquivo `.java` precisa do header de licença, senão o Spotless falha.
 - A imagem roda como `app` (não root). Arquivos copiados para o runtime precisam de `--chown=app:app`; novos diretórios graváveis também.
 - O `HEALTHCHECK` do Dockerfile usa `curl` em `/actuator/health` com `${SERVER_PORT:-8080}` (forma shell, para expandir a variável). Se tirar `health` do `exposure.include` ou a rota da lista pública, a imagem fica `unhealthy`.
 - `.dockerignore` exclui diretórios de build, caches e config de agentes e os `*.md`; `src/`, `gradle/`, `gradlew` e `*.kts` precisam continuar no contexto.
 - Ordem das camadas do build: arquivos de build (`gradlew`, `gradle/`, `*.kts`) → `gradle dependencies` → `COPY src` → `bootJar`. Mexer em código não refaz o download de dependências.
+- Boot 4: os testes de MockMvc usam `org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc` (starter `webmvc-test`) e `@AutoConfigureMetrics` (starter `micrometer-metrics-test`) para o `/actuator/prometheus`. O redirect para `/login` agora vem relativo (Security 7).
