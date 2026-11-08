@@ -14,9 +14,7 @@ RUN apk add --no-cache curl
 
 COPY --from=build /app/build/libs/service-portal-admin.jar app.jar
 
-ENV SBA_USERNAME=admin \
-    SBA_PASSWORD=admin
-
+# Credenciais (SBA_USERNAME/SBA_PASSWORD) NAO ficam na imagem: injete em runtime.
 ENV SERVER_PORT=8080 \
     SPRING_PROFILES_ACTIVE="" \
     JAVA_OPTS="-XX:+UseContainerSupport -XX:MaxRAMPercentage=75.0"

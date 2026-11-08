@@ -11,9 +11,9 @@ atualizado-em: 2026-11-07
 
 ## Resumo
 
-Servidor Spring Boot Admin (SBA) do Service Portal. Painel de monitoramento onde BFF, Manager e Orchestrator se registram como clientes. Não tem lógica de negócio, banco de dados nem endpoints próprios além do que o SBA fornece.
+Servidor Spring Boot Admin (SBA) do Service Portal. Painel de monitoramento onde BFF, Manager e Orchestrator se registram como clientes. Não tem lógica de negócio, banco de dados nem endpoints próprios além do que o SBA fornece. Tem testes de segurança (`@SpringBootTest` + MockMvc) que fixam rotas públicas, CSRF e registro de clientes.
 
-<!-- gen:size -->Tamanho: 2 arquivos .java em `src/main`, 0 em `src/test`.<!-- /gen:size -->
+<!-- gen:size -->Tamanho: 3 arquivos .java em `src/main`, 2 em `src/test`.<!-- /gen:size -->
 
 ## Stack
 
@@ -22,6 +22,7 @@ Servidor Spring Boot Admin (SBA) do Service Portal. Painel de monitoramento onde
 | Linguagem | Java 21 |
 | Framework | Spring Boot 3.4.5 + `spring-boot-admin-starter-server` 3.4.0 |
 | Build | Gradle Kotlin DSL; jar final `service-portal-admin.jar` |
+| Testes | JUnit 5, `spring-boot-starter-test`, `spring-security-test` (MockMvc); `./gradlew test` |
 | Formatação | Spotless (google-java-format AOSP + header de `../license-header.txt`) |
 | Porta | `SERVER_PORT` (padrão 8085 local, 8080 no container; host 8085 via `SBA_PORT`) |
 
@@ -31,6 +32,8 @@ Servidor Spring Boot Admin (SBA) do Service Portal. Painel de monitoramento onde
 |---|---|---|
 | `src/main/java/com/serviceportal/admin/SpringBootAdminApplication.java` | Entry point, `@EnableAdminServer` | Quase nunca |
 | `src/main/java/com/serviceportal/admin/config/SecurityConfig.java` | `SecurityFilterChain`: form login, basic auth, CSRF, rotas públicas | Mudar auth, rotas públicas ou CSRF |
+| `src/main/java/com/serviceportal/admin/config/SecurityDefaultsGuard.java` | Detecta `admin`/`admin`: WARN; falha em `prod` ou `sba.security.strict=true` | Mudar a política de defaults |
+| `src/test/java/com/serviceportal/admin/` | `AdminSecurityTest` (rotas, CSRF, registro) e `SecurityDefaultsGuardTest` | Toda mudança de segurança |
 | `src/main/resources/application.yml` | Porta, usuário/senha, título da UI, exposição do actuator | Mudar config, título, endpoints expostos |
 | `build.gradle.kts` | Dependências, versão do SBA (`sbaVersion`), Spotless | Atualizar versões ou libs |
 | `Dockerfile` | Build multi-stage (gradle 8.10 → temurin 21 jre), healthcheck via curl | Mudar imagem ou runtime |
@@ -39,9 +42,10 @@ Servidor Spring Boot Admin (SBA) do Service Portal. Painel de monitoramento onde
 
 | Quero... | Onde |
 |---|---|
-| Trocar credenciais | env `SBA_USERNAME` / `SBA_PASSWORD` (`application.yml`, `Dockerfile`, compose) |
+| Trocar credenciais | env `SBA_USERNAME` / `SBA_PASSWORD` (`application.yml`, compose; a imagem não tem default) |
+| Exigir credenciais não-default | env `SECURITY_STRICT=true` ou profile `prod`: o startup falha se continuar `admin`/`admin` |
 | Liberar uma rota sem login | `SecurityConfig.securityFilterChain` → bloco `authorizeHttpRequests` |
-| Aceitar registro de clientes sem CSRF | `SecurityConfig` → `csrf.ignoringRequestMatchers` (hoje: `/instances`, `/instances/**`, `/actuator/**`) |
+| Aceitar registro de clientes sem CSRF | `SecurityConfig` → `csrf.ignoringRequestMatchers` (hoje só `POST /instances` e `DELETE /instances/*`, por método) |
 | Mudar título da UI | `application.yml` → `spring.boot.admin.ui.title` |
 | Expor mais endpoints do actuator | `application.yml` → `management.endpoints.web.exposure.include` (hoje `health,info`) |
 | Autenticar via Authentik/OIDC | `SecurityConfig` + nova dependência `oauth2-client` em `build.gradle.kts` |
@@ -51,7 +55,9 @@ Servidor Spring Boot Admin (SBA) do Service Portal. Painel de monitoramento onde
 
 - Rotas públicas: `/assets/**`, `/actuator/health`, `/actuator/info`, `/login`. Todo o resto exige autenticação.
 - Todas as rotas respeitam `adminServer.getContextPath()` (prefixo `ctx`).
-- Clientes registram em `POST /instances` com basic auth. CSRF fica desligado só para `/instances*` e `/actuator/**`.
+- Clientes registram em `POST /instances` com basic auth. CSRF fica desligado só para `POST /instances` e `DELETE /instances/*`; qualquer outro POST/DELETE (inclusive `/logout` e `/actuator/**`) exige token CSRF. O SBA responde 200 (não 201) ao registro.
+- `health` mostra detalhes só `when-authorized` (anônimo vê apenas o status).
+- `SecurityDefaultsGuard`: com `SBA_USERNAME`/`SBA_PASSWORD` em `admin`/`admin` loga WARN com o nome da variável (nunca o valor); com profile `prod` ou `SECURITY_STRICT=true` o startup falha (`IllegalStateException`). Dev, testes e compose seguem funcionando com o default.
 - Após login, redireciona para o parâmetro `redirectTo` ou `ctx + "/"`.
 
 ## Integrações com o resto do monorepo
@@ -66,12 +72,16 @@ Servidor Spring Boot Admin (SBA) do Service Portal. Painel de monitoramento onde
 
 ```bash
 ./gradlew bootRun          # sobe em :8085
+./gradlew test             # testes de segurança
 ./gradlew spotlessApply    # formata (obrigatório antes de commit)
 ./gradlew bootJar -x test  # gera build/libs/service-portal-admin.jar
 ```
 
 ## Armadilhas
 
+- Segredos nunca em `ENV` do Dockerfile: sem `SBA_PASSWORD` a imagem sobe com o default `admin` (WARN); em produção defina `SBA_PASSWORD` e `SECURITY_STRICT=true`.
+- Matchers com método (`AntPathRequestMatcher(path, "POST")`) são parte do contrato de registro: mudar o matcher na atualização do Spring Boot exige rodar `AdminSecurityTest`.
+- Usuário único compartilhado: a mesma credencial serve à UI e ao registro dos clientes (BFF, Manager, Orchestrator).
 - Alterar `SecurityConfig` sem o `ctx` quebra a UI quando há `spring.boot.admin.context-path`.
 - O SBA server roda em modo servlet. Remover `spring-boot-starter-web` causa `ClassNotFoundException` (commit `dcfc3fc`).
 - Trocar a senha só no admin faz os clientes falharem no registro: atualize `SBA_USERNAME`/`SBA_PASSWORD` em todos os componentes.
