@@ -24,6 +24,7 @@
 package com.serviceportal.admin;
 
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.httpBasic;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
@@ -150,5 +151,41 @@ class AdminSecurityTest {
                                                 .SecurityMockMvcRequestPostProcessors.csrf()))
                 .andExpect(status().isFound())
                 .andExpect(header().string("Location", "/"));
+    }
+
+    @Test
+    @DisplayName("health hides component details from anonymous users")
+    void healthHidesDetailsFromAnonymous() throws Exception {
+        mvc.perform(get("/actuator/health"))
+                .andExpect(status().isOk())
+                .andExpect(
+                        org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath(
+                                        "$.components")
+                                .doesNotExist());
+    }
+
+    @Test
+    @DisplayName("DELETE /instances/{id} with basic auth is not blocked by CSRF")
+    void deregistrationWithBasicAuth() throws Exception {
+        int s =
+                mvc.perform(delete("/instances/unknown").with(httpBasic("admin", "admin")))
+                        .andReturn()
+                        .getResponse()
+                        .getStatus();
+        org.assertj.core.api.Assertions.assertThat(s).isNotEqualTo(403);
+    }
+
+    @Test
+    @DisplayName("POST /logout without CSRF token is rejected")
+    void logoutRequiresCsrf() throws Exception {
+        mvc.perform(post("/logout").with(httpBasic("admin", "admin")))
+                .andExpect(status().isForbidden());
+    }
+
+    @Test
+    @DisplayName("POST to actuator without CSRF token is rejected")
+    void actuatorPostRequiresCsrf() throws Exception {
+        mvc.perform(post("/actuator/health").with(httpBasic("admin", "admin")))
+                .andExpect(status().isForbidden());
     }
 }

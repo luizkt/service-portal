@@ -55,9 +55,8 @@ public class SecurityConfig {
         http.csrf(
                         csrf ->
                                 csrf.ignoringRequestMatchers(
-                                        new AntPathRequestMatcher(ctx + "/instances"),
-                                        new AntPathRequestMatcher(ctx + "/instances/**"),
-                                        new AntPathRequestMatcher(ctx + "/actuator/**")))
+                                        new AntPathRequestMatcher(ctx + "/instances", "POST"),
+                                        new AntPathRequestMatcher(ctx + "/instances/*", "DELETE")))
                 .authorizeHttpRequests(
                         auth ->
                                 auth.requestMatchers(ctx + "/assets/**")
