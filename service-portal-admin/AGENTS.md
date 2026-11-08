@@ -80,7 +80,7 @@ Servidor Spring Boot Admin (SBA) do Service Portal. Painel de monitoramento onde
 ## Armadilhas
 
 - Segredos nunca em `ENV` do Dockerfile: sem `SBA_PASSWORD` a imagem sobe com o default `admin` (WARN); em produção defina `SBA_PASSWORD` e `SECURITY_STRICT=true`.
-- Matchers com método (`AntPathRequestMatcher(path, "POST")`) são parte do contrato de registro: mudar o matcher na atualização do Spring Boot exige rodar `AdminSecurityTest`.
+- Matchers com método (`PathPatternRequestMatcher.withDefaults().matcher(HttpMethod.POST, path)`) são parte do contrato de registro: mudar o matcher na atualização do Spring Boot exige rodar `AdminSecurityTest`.
 - Usuário único compartilhado: a mesma credencial serve à UI e ao registro dos clientes (BFF, Manager, Orchestrator).
 - Alterar `SecurityConfig` sem o `ctx` quebra a UI quando há `spring.boot.admin.context-path`.
 - O SBA server roda em modo servlet. Remover `spring-boot-starter-web` causa `ClassNotFoundException` (commit `dcfc3fc`).
