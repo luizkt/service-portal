@@ -6,3 +6,5 @@ service-portal-manager/
 *.log
 
 teste-integrado-checklist-*.md
+# Segredos locais: copie de env.example, nunca versione
+.env
