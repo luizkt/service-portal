@@ -512,7 +512,7 @@ services:
       AUTHENTIK_M2M_ISSUER_URI:   http://localhost:${AUTHENTIK_PORT_HTTP:-9000}/application/o/${AUTHENTIK_M2M_APP_SLUG:-service-portal-m2m}/
       # CLIENT_ID: client público SPA cadastrado no Authentik
       AUTHENTIK_CLIENT_ID:        ${AUTHENTIK_CLIENT_ID:-service-portal-spa}
-      # BASE_URL: Authentik pela rede interna; o BFF chama o Flow Executor daqui (localhost seria o próprio container)
+      # BASE_URL: Authentik pela rede interna. O perfil docker do BFF já usa este valor por padrão; declarar aqui só deixa explícito e permite trocar
       AUTHENTIK_BASE_URL:         http://authentik-server:9000
       AUTHENTIK_REQUEST_TIMEOUT:  ${AUTHENTIK_REQUEST_TIMEOUT:-10s}
       # REDIRECT_URI: idêntico ao redirect URI do provider SPA (o BFF só lê o code)
