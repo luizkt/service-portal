@@ -1,0 +1,31 @@
+# Override de compose só para o teste de performance.
+#
+# O circuit breaker do orquestrador conta chamada acima de
+# orch-integrations.circuit-breaker-configuration.slow-call-duration-threshold (800 ms por padrão)
+# como lenta e abre o circuito quando a janela inteira é lenta. Sob 20 ou 50 VUs o stub do WireMock
+# passa de 800 ms, o circuito abre e o orquestrador devolve FAILED imediatamente: o teste passa a
+# medir respostas de erro rápidas, não a capacidade do v1 e do v2.
+#
+# Nome da variável: o Boot remove os hífens de todos os segmentos (orch-integrations -> ORCHINTEGRATIONS).
+#
+# O run-perf-test.sh aplica este arquivo ao orquestrador antes de medir e restaura a configuração
+# normal ao terminar. A configuração de produção (application.yml) não muda.
+services:
+  orchestrator:
+    environment:
+      ORCHINTEGRATIONS_CIRCUITBREAKERCONFIGURATION_SLOWCALLDURATIONTHRESHOLD: "30000"
+
+  # O WireMock padrão atende ~40 chamadas/s com o stub de 500 ms (pool pequeno do Jetty e log
+  # --verbose). Acima disso o teste mede o stub, não o orquestrador: v1 e v2 saem com a mesma vazão.
+  # Aqui o pool e o modo assíncrono ficam folgados e o log verboso sai.
+  wiremock:
+    command:
+      - "--port"
+      - "80"
+      - "--global-response-templating"
+      - "--container-threads"
+      - "400"
+      - "--async-response-enabled"
+      - "true"
+      - "--async-response-threads"
+      - "400"
