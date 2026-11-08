@@ -11,6 +11,7 @@ Este documento serve como índice para toda a documentação técnica do Service
 - Observabilidade: Agrupamento de Logs (MDC)
 - UX/UI: Unificação de Layout
 - Infra: Dados de Exemplo MongoDB
+- Plataforma: [Upgrade do Spring Boot 3.4.5 → 4.1.2](plans/PLAN-spring-boot-upgrade.md), com a [pesquisa de apoio](plans/PLAN-spring-boot-upgrade-pesquisa.md)
 
 ## 📊 Monitoramento (`docs/monitoring/`)
 - Prometheus Config: Regras de coleta.
