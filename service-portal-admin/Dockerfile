@@ -17,8 +17,10 @@ FROM eclipse-temurin:21-jre-alpine
 WORKDIR /app
 
 RUN apk add --no-cache curl
+RUN addgroup -S app && adduser -S -G app app \
+    && chown app:app /app
 
-COPY --from=build /app/build/libs/service-portal-admin.jar app.jar
+COPY --from=build --chown=app:app /app/build/libs/service-portal-admin.jar app.jar
 
 ENV SBA_USERNAME=admin \
     SBA_PASSWORD=admin
@@ -28,5 +30,7 @@ ENV SERVER_PORT=8080 \
     JAVA_OPTS="-XX:+UseContainerSupport -XX:MaxRAMPercentage=75.0"
 
 EXPOSE 8080
+
+USER app
 
 ENTRYPOINT ["sh", "-c", "exec java $JAVA_OPTS -jar app.jar"]
