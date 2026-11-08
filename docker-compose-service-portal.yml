@@ -551,10 +551,11 @@ services:
     restart: unless-stopped
     environment:
       BFF_URL:    http://bff:${BFF_INTERNAL_PORT:-8081}
-      NGINX_PORT: ${FRONTEND_INTERNAL_PORT:-80}
+      # Porta interna fixa: o nginx roda sem privilégio (uid 101) e não abre portas abaixo de 1024.
+      NGINX_PORT: 8080
       CSP_CONNECT_SRC_EXTRA: http://localhost:${AUTHENTIK_PORT_HTTP:-9000}
     ports:
-      - "${FRONTEND_PORT:-80}:${FRONTEND_INTERNAL_PORT:-80}"
+      - "${FRONTEND_PORT:-80}:8080"
     depends_on:
       bff:
         condition: service_healthy
