@@ -204,4 +204,11 @@ O que quebrou no M3 e como foi resolvido (útil para próximas subidas):
 
 Atenção ao mergear: as branches de login do BFF (`feature/bff-login-hardening`) e as demais que tocam `AuthentikLoginService` usam `JsonProcessingException`; depois do M3 esse trecho precisa seguir o Jackson 3 (remover o `catch` de `JsonProcessingException` e esperar `JacksonException`).
 
-Ainda não verificado: o modo `SECURITY_STRICT=true` na imagem em execução, o login real pelo browser, e a migração de dados do Mongo com um volume novo (o volume existente funcionou nos testes integrados).
+Verificado depois, no Boot 4.1.2 e com as imagens em execução (2026-11-08):
+
+- `SECURITY_STRICT=true` com os segredos padrão: os 4 apps (orquestrador, BFF, Manager e admin) falham na subida em `securityDefaultsGuard` com código de saída 1, e a mensagem cita só os nomes das variáveis, nunca os valores.
+- `SECURITY_STRICT=true` com segredos fortes na stack completa: os 4 containers ficam saudáveis, o SBA registra os 3 clientes UP e nenhum log tem o aviso de defaults inseguros.
+- Login real: `POST /bff/auth/login` contra o Authentik devolveu 200 com `access_token` e `id_token` para um usuário temporário (criado e apagado pela API do Authentik), e o BFF aceitou o token em `/bff/menu` (200, e 401 sem token). Isso cobre o fluxo ROPC do BFF e a validação por JWKS no Boot 4. O `redirect_uri` padrão (`http://localhost:5173/auth/callback`) é aceito pelo provider.
+- Mongo com volume novo (projeto compose separado, removido depois): o `init-mongo.js` semeia as coleções, o Manager lê, cria flow (201), lê o YAML e lista os ativos. O volume antigo já tinha funcionado.
+
+Ainda não verificado: o fluxo PKCE da SPA no browser (a tela de login, o redirect e o callback do frontend).
