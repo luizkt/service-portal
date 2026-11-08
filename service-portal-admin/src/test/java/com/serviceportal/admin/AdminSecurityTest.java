@@ -33,6 +33,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.autoconfigure.actuate.observability.AutoConfigureObservability;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.http.MediaType;
@@ -41,6 +42,7 @@ import org.springframework.test.web.servlet.MockMvc;
 /** Pins the security rules of the admin server (public routes, CSRF, registration). */
 @SpringBootTest
 @AutoConfigureMockMvc
+@AutoConfigureObservability
 class AdminSecurityTest {
 
     private static final String REGISTRATION =
@@ -55,6 +57,13 @@ class AdminSecurityTest {
     @DisplayName("anonymous GET /actuator/health is public")
     void healthIsPublic() throws Exception {
         mvc.perform(get("/actuator/health")).andExpect(status().isOk());
+    }
+
+    @Test
+    @DisplayName(
+            "anonymous GET /actuator/prometheus is public (Prometheus scrapes without credentials)")
+    void prometheusIsPublic() throws Exception {
+        mvc.perform(get("/actuator/prometheus")).andExpect(status().isOk());
     }
 
     @Test

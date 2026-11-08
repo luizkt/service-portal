@@ -66,7 +66,7 @@ Servidor Spring Boot Admin (SBA) do Service Portal. Painel de monitoramento onde
 |---|---|---|
 | BFF, Manager, Orchestrator | Clientes SBA, registram aqui | `spring.boot.admin.client.url` em cada `application*.yml` (`SPRING_BOOT_ADMIN_URL`, padrão `http://spring-boot-admin:8080` no docker) |
 | `docker-compose-service-portal.yml` | Serviço `spring-boot-admin`, container `portal-sba` | seção `spring-boot-admin` (~linha 640) |
-| Prometheus / Grafana | Sem relação direta com o SBA | `prometheus/`, `grafana/` |
+| Prometheus / Grafana | O admin expõe `/actuator/prometheus` (público, regra em `config/SecurityConfig`); job `service-portal-admin` em `../prometheus/prometheus.yml` | `prometheus/`, `grafana/` |
 
 ## Comandos
 

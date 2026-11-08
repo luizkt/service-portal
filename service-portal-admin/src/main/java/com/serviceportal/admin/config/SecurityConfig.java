@@ -65,6 +65,8 @@ public class SecurityConfig {
                                         .permitAll()
                                         .requestMatchers(ctx + "/actuator/info")
                                         .permitAll()
+                                        .requestMatchers(ctx + "/actuator/prometheus")
+                                        .permitAll()
                                         .requestMatchers(ctx + "/login")
                                         .permitAll()
                                         .anyRequest()

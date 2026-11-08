@@ -13,6 +13,11 @@ scrape_configs:
     static_configs:
       - targets: ['bff:8081']
 
+  - job_name: 'service-portal-admin'
+    metrics_path: '/actuator/prometheus'
+    static_configs:
+      - targets: ['spring-boot-admin:8080']
+
   - job_name: 'service-portal-manager'
     metrics_path: '/actuator/prometheus'
     static_configs:
