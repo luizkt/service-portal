@@ -36,7 +36,7 @@ Servidor Spring Boot Admin (SBA) do Service Portal. Painel de monitoramento onde
 | `src/test/java/com/serviceportal/admin/` | `AdminSecurityTest` (rotas, CSRF, registro) e `SecurityDefaultsGuardTest` | Toda mudança de segurança |
 | `src/main/resources/application.yml` | Porta, usuário/senha, título da UI, exposição do actuator | Mudar config, título, endpoints expostos |
 | `build.gradle.kts` | Dependências, versão do SBA (`sbaVersion`), Spotless | Atualizar versões ou libs |
-| `Dockerfile` | Build multi-stage (gradle 8.10 → temurin 21 jre), healthcheck via curl | Mudar imagem ou runtime |
+| `Dockerfile` | Build multi-stage (gradle 8.10 → temurin 21 jre), `HEALTHCHECK` via curl em `/actuator/health`, usuário não-root `app` | Mudar imagem ou runtime |
 
 ## Pontos-chave por tipo de mudança
 
@@ -86,3 +86,7 @@ Servidor Spring Boot Admin (SBA) do Service Portal. Painel de monitoramento onde
 - O SBA server roda em modo servlet. Remover `spring-boot-starter-web` causa `ClassNotFoundException` (commit `dcfc3fc`).
 - Trocar a senha só no admin faz os clientes falharem no registro: atualize `SBA_USERNAME`/`SBA_PASSWORD` em todos os componentes.
 - Todo arquivo `.java` precisa do header de licença, senão o Spotless falha.
+- A imagem roda como `app` (não root). Arquivos copiados para o runtime precisam de `--chown=app:app`; novos diretórios graváveis também.
+- O `HEALTHCHECK` do Dockerfile usa `curl` em `/actuator/health` com `${SERVER_PORT:-8080}` (forma shell, para expandir a variável). Se tirar `health` do `exposure.include` ou a rota da lista pública, a imagem fica `unhealthy`.
+- `.dockerignore` exclui diretórios de build, caches e config de agentes e os `*.md`; `src/`, `gradle/`, `gradlew` e `*.kts` precisam continuar no contexto.
+- Ordem das camadas do build: arquivos de build (`gradlew`, `gradle/`, `*.kts`) → `gradle dependencies` → `COPY src` → `bootJar`. Mexer em código não refaz o download de dependências.
