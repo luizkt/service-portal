@@ -31,6 +31,10 @@ ENV SERVER_PORT=8080 \
 
 EXPOSE 8080
 
+# O admin não depende de banco nem de outros serviços: o health geral basta
+HEALTHCHECK --interval=15s --timeout=5s --start-period=40s --retries=5 \
+    CMD curl -fsS http://localhost:${SERVER_PORT:-8080}/actuator/health || exit 1
+
 USER app
 
 ENTRYPOINT ["sh", "-c", "exec java $JAVA_OPTS -jar app.jar"]
