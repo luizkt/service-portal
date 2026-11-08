@@ -33,16 +33,16 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.autoconfigure.actuate.observability.AutoConfigureObservability;
-import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
+import org.springframework.boot.micrometer.metrics.test.autoconfigure.AutoConfigureMetrics;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.http.MediaType;
 import org.springframework.test.web.servlet.MockMvc;
 
 /** Pins the security rules of the admin server (public routes, CSRF, registration). */
 @SpringBootTest
 @AutoConfigureMockMvc
-@AutoConfigureObservability
+@AutoConfigureMetrics
 class AdminSecurityTest {
 
     private static final String REGISTRATION =
@@ -77,7 +77,8 @@ class AdminSecurityTest {
     void rootRedirectsToLogin() throws Exception {
         mvc.perform(get("/").accept(MediaType.TEXT_HTML))
                 .andExpect(status().isFound())
-                .andExpect(header().string("Location", "http://localhost/login"));
+                // Spring Security 7 devolve o Location relativo (/login); 6.x devolvia absoluto.
+                .andExpect(header().string("Location", org.hamcrest.Matchers.endsWith("/login")));
     }
 
     @Test

@@ -2,7 +2,7 @@ import org.springframework.boot.gradle.tasks.bundling.BootJar
 
 plugins {
     java
-    id("org.springframework.boot") version "3.5.16"
+    id("org.springframework.boot") version "4.0.9"
     id("io.spring.dependency-management") version "1.1.7"
     id("com.diffplug.spotless") version "8.11.0"
 }
@@ -18,15 +18,18 @@ java {
 
 repositories { mavenCentral() }
 
-extra["sbaVersion"] = "3.5.11"
+extra["sbaVersion"] = "4.0.4"
 
 dependencies {
     implementation("de.codecentric:spring-boot-admin-starter-server:${property("sbaVersion")}")
-    implementation("org.springframework.boot:spring-boot-starter-web")
+    implementation("org.springframework.boot:spring-boot-starter-webmvc")
     implementation("org.springframework.boot:spring-boot-starter-security")
     implementation("org.springframework.boot:spring-boot-starter-actuator")
     implementation("io.micrometer:micrometer-registry-prometheus")
     testImplementation("org.springframework.boot:spring-boot-starter-test")
+    testImplementation("org.springframework.boot:spring-boot-starter-webmvc-test")
+    testImplementation("org.springframework.boot:spring-boot-starter-security-test")
+    testImplementation("org.springframework.boot:spring-boot-starter-micrometer-metrics-test")
     testImplementation("org.springframework.security:spring-security-test")
     testRuntimeOnly("org.junit.platform:junit-platform-launcher")
 }
