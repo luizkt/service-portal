@@ -20,7 +20,7 @@ Servidor Spring Boot Admin (SBA) do Service Portal. Painel de monitoramento onde
 | Item | Valor |
 |---|---|
 | Linguagem | Java 21 |
-| Framework | Spring Boot 3.4.13 + `spring-boot-admin-starter-server` 3.4.7 |
+| Framework | Spring Boot 3.5.16 + `spring-boot-admin-starter-server` 3.5.11 |
 | Build | Gradle Kotlin DSL; jar final `service-portal-admin.jar` |
 | Testes | JUnit 5, `spring-boot-starter-test`, `spring-security-test` (MockMvc); `./gradlew test` |
 | Formatação | Spotless (google-java-format AOSP + header de `../license-header.txt`) |
