@@ -13,7 +13,7 @@ atualizado-em: 2026-11-07
 
 Servidor Spring Boot Admin (SBA) do Service Portal. Painel de monitoramento onde BFF, Manager e Orchestrator se registram como clientes. Não tem lógica de negócio, banco de dados nem endpoints próprios além do que o SBA fornece.
 
-<!-- gen:size -->Tamanho: 2 arquivos .java em `src/main`, 0 em `src/test`.<!-- /gen:size -->
+<!-- gen:size -->Tamanho: 2 arquivos .java em `src/main`, 1 em `src/test`.<!-- /gen:size -->
 
 ## Stack
 
