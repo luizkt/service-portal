@@ -26,12 +26,13 @@ package com.serviceportal.admin.config;
 import de.codecentric.boot.admin.server.config.AdminServerProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.http.HttpMethod;
 import org.springframework.security.config.Customizer;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
 import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.security.web.authentication.SavedRequestAwareAuthenticationSuccessHandler;
-import org.springframework.security.web.util.matcher.AntPathRequestMatcher;
+import org.springframework.security.web.servlet.util.matcher.PathPatternRequestMatcher;
 
 @Configuration
 @EnableWebSecurity
@@ -55,8 +56,10 @@ public class SecurityConfig {
         http.csrf(
                         csrf ->
                                 csrf.ignoringRequestMatchers(
-                                        new AntPathRequestMatcher(ctx + "/instances", "POST"),
-                                        new AntPathRequestMatcher(ctx + "/instances/*", "DELETE")))
+                                        PathPatternRequestMatcher.withDefaults()
+                                                .matcher(HttpMethod.POST, ctx + "/instances"),
+                                        PathPatternRequestMatcher.withDefaults()
+                                                .matcher(HttpMethod.DELETE, ctx + "/instances/*")))
                 .authorizeHttpRequests(
                         auth ->
                                 auth.requestMatchers(ctx + "/assets/**")
