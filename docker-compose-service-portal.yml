@@ -516,6 +516,11 @@ services:
       AUTHENTIK_M2M_ISSUER_URI:   http://localhost:${AUTHENTIK_PORT_HTTP:-9000}/application/o/${AUTHENTIK_M2M_APP_SLUG:-service-portal-m2m}/
       # CLIENT_ID: client público SPA cadastrado no Authentik
       AUTHENTIK_CLIENT_ID:        ${AUTHENTIK_CLIENT_ID:-service-portal-spa}
+      # BASE_URL: Authentik pela rede interna. O perfil docker do BFF já usa este valor por padrão; declarar aqui só deixa explícito e permite trocar
+      AUTHENTIK_BASE_URL:         http://authentik-server:9000
+      AUTHENTIK_REQUEST_TIMEOUT:  ${AUTHENTIK_REQUEST_TIMEOUT:-10s}
+      # REDIRECT_URI: idêntico ao redirect URI do provider SPA (o BFF só lê o code)
+      AUTHENTIK_REDIRECT_URI:     ${AUTHENTIK_REDIRECT_URI:-http://localhost:5173/auth/callback}
       SPRING_BOOT_ADMIN_URL:      http://spring-boot-admin:8080
       SBA_USERNAME:               ${SBA_USERNAME:-admin}
       SBA_PASSWORD:               ${SBA_PASSWORD:-admin}
