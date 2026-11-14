@@ -28,6 +28,20 @@
 | stress | 50 | 3m |
 | spike | 150 | 1m |
 
+## Metodologia (leia antes dos números)
+
+### Sucesso (flows) e por que a latência só vale com 100%
+
+O orquestrador responde **HTTP 200 mesmo quando o flow termina `FAILED`** (o status vem no corpo). Por isso `http_req_failed` do k6 / a coluna "Erros (HTTP)" mostra ~0% e esconde falhas; numa rodada anterior a v3 teve ~22% de flows `FAILED` no spike com 0% de erro HTTP. O k6 agora exporta a métrica `workflow_success` (true quando HTTP 200 **e** `"status":"SUCCESS"` no corpo, com tag `version`), exibida como **"Sucesso (flows)"**. A latência de uma linha só é comparável com as demais quando Sucesso = 100%; abaixo disso, a linha mede degradação, não ganho.
+
+### Reinício entre execuções
+
+Execuções seguidas se contaminam: o estado do circuit breaker (por id de integração, `perf-1`..`perf-6`) é compartilhado entre versões e rodadas, e requests pendentes de uma rodada atrasam a seguinte (o `setup()` do k6 chegou a estourar 60 s). O runner reinicia o orquestrador (`docker restart`), espera `healthy` e aguarda CPU ociosa (< 10% em 2 amostras do `docker stats`) antes de **cada** warm-up e de cada execução medida. Desligue com `--no-restart`.
+
+### Circuit breaker relaxado
+
+O breaker tem `slow-call-duration-threshold: 800` ms (janela de 10 chamadas, `slowCallRateThreshold` fixo em 100%) e o stub responde em ~500 ms: sob carga a latência passa de 800 ms, o breaker abre por 30 s e derruba os flows. Para medir concorrência e não o ajuste do breaker, o runner (default `--relaxed-breaker`) recria o orquestrador uma vez com `tests/performance/compose.perf.override.yml`, que define `ORCHINTEGRATIONS_CIRCUITBREAKERCONFIGURATION_SLOWCALLDURATIONTHRESHOLD=3000`. A stack **fica com o override** ao final. Para remover: `docker compose -f docker-compose-service-portal.yml up -d --no-build orchestrator`. Use `--no-relaxed-breaker` para não aplicá-lo.
+
 ## Resultados
 
 Ainda não executado. Rode `./tests/performance/run-perf-test.sh` para gerar as tabelas de latência, speedup e recursos (docker stats); os brutos ficam em `docs/performance/raw/`.

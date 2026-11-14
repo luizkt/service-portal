@@ -35,8 +35,13 @@ A implementação do endpoint v2 (hoje **v3**) no `generic-orchestrator` utiliza
 
 ### Implementação atual
 - `API_VERSION` aceita `v1|v2|v3`; `run-perf-test.sh` roda v1 → v2 → v3 por cenário (baseline/load/stress/spike) com warm-up e cooldown, usa `--summary-export` (JSON) e coleta `docker stats` do container do orquestrador.
-- Flags: `--scenario`, `--versions`, `--repeats N` (default 2; mediana das repetições, ordem v1→v2→v3 intercalada por repetição), `--warmup`, `--cooldown`, `--no-stats`, `--skip-setup`.
+- Flags: `--scenario`, `--versions`, `--repeats N` (default 2; mediana das repetições, ordem v1→v2→v3 intercalada por repetição), `--warmup`, `--cooldown`, `--no-stats`, `--skip-setup`, `--no-restart`, `--relaxed-breaker|--no-relaxed-breaker`.
 - Relatório gerado em `docs/performance/RESULTS-v1-v2-v3.md` (speedup vs v1 e v3 vs v2, configuração do pool).
+
+### Lições do primeiro benchmark (correções no runner)
+- **Sucesso real dos flows**: o orquestrador responde HTTP 200 mesmo com flow `FAILED`, então `http_req_failed` esconde falhas. O k6 tem a métrica `Rate('workflow_success')` (HTTP 200 + `"status":"SUCCESS"`, tag `version`) e o relatório traz a coluna "Sucesso (flows)"; latência só é comparável com Sucesso = 100%.
+- **Isolamento entre execuções**: o runner reinicia o orquestrador (`docker restart`), espera `healthy` e CPU ociosa antes de cada warm-up/medição (`--no-restart` desliga), pois o estado do circuit breaker (por id de integração) e requests pendentes contaminam a rodada seguinte. `setupTimeout` do k6 = 120 s.
+- **Circuit breaker relaxado**: `slow-call-duration-threshold` default 800 ms < latência sob carga (stub 500 ms) abre o breaker por 30 s. O benchmark usa 3000 ms via `tests/performance/compose.perf.override.yml` (`ORCHINTEGRATIONS_CIRCUITBREAKERCONFIGURATION_SLOWCALLDURATIONTHRESHOLD=3000`), aplicado pelo runner (`--relaxed-breaker`, default; `--no-relaxed-breaker` desliga). A stack fica com o override ao final; remover com `docker compose -f docker-compose-service-portal.yml up -d --no-build orchestrator`.
 
 ## Detalhes Técnicos do Script k6
 
