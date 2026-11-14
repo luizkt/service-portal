@@ -1,235 +1,490 @@
 #!/bin/bash
-# Executa o benchmark de performance do generic-orchestrator (v1 vs v2).
+# Executa o benchmark de performance do generic-orchestrator (v1 x v2 x v3).
+#
+#   v1 = sequencial | v2 = threads físicas (pool fixo) | v3 = virtual threads
 #
 # Fluxo:
-#   1. Aplica o perfil de performance (docker-compose.perf.yml: circuit breaker sem abrir por
-#      chamada lenta e WireMock com pool folgado) e espera ficar healthy. Ao terminar, restaura.
-#   2. Cria o perf-test-flow no Manager (via setup-perf-flow.sh)
-#   3. Roda k6 nos cenários baseline / load / stress para v1 e v2
-#   4. Salva logs brutos em docs/performance/raw/
-#   5. Gera relatório Markdown em docs/performance/RESULTS-v1-vs-v2.md
-#
-# O k6 falha a execução quando menos de 99% das respostas trazem "status":"SUCCESS" (limiar
-# workflow_success). O script segue para os demais cenários, marca o resultado como FALHOU no
-# relatório e sai com código 1 no fim.
+#   1. Cria o perf-test-flow no Manager (via setup-perf-flow.sh)
+#   2. Para cada cenário e cada versão: warm-up curto + k6 medido + cooldown
+#   3. Salva logs (.txt) e summary (.json) em docs/performance/raw/
+#   4. Gera docs/performance/RESULTS-v1-v2-v3.md
 #
 # Pré-requisitos:
 #   • docker compose up -d (todos os serviços healthy)
 #   • Docker com acesso à imagem grafana/k6
+#   • jq (opcional; sem ele usa fallback com grep/sed)
 #
 # Uso:
-#   ./tests/performance/run-perf-test.sh [--skip-setup] [--no-perf-profile] \
-#                                        [--scenario baseline|load|stress|all]
+#   ./tests/performance/run-perf-test.sh [opções]
+#
+# Opções:
+#   --skip-setup            não cria o perf-test-flow
+#   --scenario LISTA        baseline|load|stress|spike|all, ou lista separada
+#                           por vírgula (ex.: load,spike)         [all]
+#   --versions LISTA        lista de versões, ex.: v2,v3          [v1,v2,v3]
+#   --warmup DURACAO        warm-up antes de cada medição, 0 desliga [15s]
+#   --cooldown SEGUNDOS     pausa entre execuções                 [20]
+#   --repeats N             repetições por cenário×versão; o relatório usa a
+#                           MEDIANA. Ordem v1→v2→v3 intercalada por repetição;
+#                           raw em <cenario>-<versao>-r<N>.{txt,json,stats} [2]
+#   --no-stats              desliga a coleta de docker stats
+#   --stats-interval SEG    intervalo do docker stats             [5]
+#   --no-restart            NÃO reinicia o orquestrador antes de cada execução.
+#                           Por padrão, antes do warm-up e de cada execução medida
+#                           roda `docker restart ${ORCH_CONTAINER}`, espera healthy e
+#                           aguarda CPU ociosa (<10% em 2 amostras seguidas de
+#                           docker stats, timeout 120s). Isso zera o estado do circuit
+#                           breaker (por id de integração) e descarta requests
+#                           pendentes da rodada anterior, evitando contaminação.
+#   --relaxed-breaker       (default) recria o orquestrador UMA vez no início com o
+#   --no-relaxed-breaker    override tests/performance/compose.perf.override.yml, que
+#                           define slow-call-duration-threshold=3000 ms (default da
+#                           app: 800 ms; o stub responde em ~500 ms e, sob carga, o
+#                           breaker abriria por 30 s e derrubaria os flows). Assim o
+#                           benchmark mede concorrência, não o ajuste do breaker.
+#                           --no-relaxed-breaker não aplica o override (e não o remove).
+#
+# Circuit breaker relaxado — aplicar/remover manualmente:
+#   variável: ORCHINTEGRATIONS_CIRCUITBREAKERCONFIGURATION_SLOWCALLDURATIONTHRESHOLD=3000
+#   aplicar:  docker compose -f docker-compose-service-portal.yml \
+#               -f tests/performance/compose.perf.override.yml up -d --no-build orchestrator
+#   remover:  docker compose -f docker-compose-service-portal.yml up -d --no-build orchestrator
+#   ATENÇÃO: ao final o runner NÃO reverte; a stack fica com o override até você remover.
+#
+# Métrica de negócio: o orquestrador devolve HTTP 200 mesmo com flow FAILED no corpo;
+# por isso o k6 exporta workflow_success (HTTP 200 E "status":"SUCCESS"), mostrado como
+# "Sucesso (flows)". Latência só é comparável quando Sucesso = 100%.
+#
+# Variáveis de ambiente: ORCH_CONTAINER (portal-orchestrator), NETWORK,
+# K6_IMAGE, COMPOSE_PROJECT (service-portal), COMPOSE_ENV_FILE (caminho do .env quando rodar de um worktree sem .env), IDLE_CPU_MAX (10, % de CPU para
+# considerar ocioso), IDLE_TIMEOUT (120, s), POOL_CORE/POOL_MAX/POOL_QUEUE/POOL_POLICY (informativo no
+# relatório; default 200/200/ver application.yml/CallerRunsPolicy),
+# POOL_METRIC_NOTE (nome da métrica Micrometer do pool v2, opcional).
 #
 # Exemplos:
 #   ./tests/performance/run-perf-test.sh
-#   ./tests/performance/run-perf-test.sh --scenario load
-#   ./tests/performance/run-perf-test.sh --skip-setup --scenario stress
-#   ./tests/performance/run-perf-test.sh --no-perf-profile   # mede com a config padrão do circuito
+#   ./tests/performance/run-perf-test.sh --skip-setup --scenario spike --versions v2,v3
+#   ./tests/performance/run-perf-test.sh --scenario load,stress --cooldown 30
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 RAW_DIR="${REPO_ROOT}/docs/performance/raw"
-RESULTS_FILE="${REPO_ROOT}/docs/performance/RESULTS-v1-vs-v2.md"
-COMPOSE_PROJECT="${COMPOSE_PROJECT_NAME:-service-portal}"
-COMPOSE_FILE="${REPO_ROOT}/docker-compose-service-portal.yml"
-PERF_COMPOSE_FILE="${SCRIPT_DIR}/docker-compose.perf.yml"
-NETWORK="${COMPOSE_PROJECT}_portal"
-K6_IMAGE="grafana/k6:latest"
+RESULTS_FILE="${REPO_ROOT}/docs/performance/RESULTS-v1-v2-v3.md"
+NETWORK="${NETWORK:-service-portal_portal}"
+K6_IMAGE="${K6_IMAGE:-grafana/k6:latest}"
 ORCH_CONTAINER="${ORCH_CONTAINER:-portal-orchestrator}"
 
+POOL_CORE="${POOL_CORE:-200}"
+POOL_MAX="${POOL_MAX:-200}"
+POOL_QUEUE="${POOL_QUEUE:-limitada (ver orchestrator.platform-pool.queue-capacity)}"
+POOL_POLICY="${POOL_POLICY:-CallerRunsPolicy}"
+POOL_METRIC_NOTE="${POOL_METRIC_NOTE:-}"
+
 SKIP_SETUP=false
-PERF_PROFILE=true
-SCENARIO="all"
+SCENARIOS="all"
+VERSIONS_CSV="v1,v2,v3"
+WARMUP="15s"
+COOLDOWN=20
+REPEATS=2
+STATS=true
+STATS_INTERVAL=5
+RESTART=true
+RELAXED_BREAKER=true
+COMPOSE_PROJECT="${COMPOSE_PROJECT:-service-portal}"
+IDLE_CPU_MAX="${IDLE_CPU_MAX:-10}"
+IDLE_TIMEOUT="${IDLE_TIMEOUT:-120}"
+BREAKER_ENV_VAR="ORCHINTEGRATIONS_CIRCUITBREAKERCONFIGURATION_SLOWCALLDURATIONTHRESHOLD"
+BREAKER_OVERRIDE_FILE="${SCRIPT_DIR}/compose.perf.override.yml"
 
 while [[ $# -gt 0 ]]; do
     case $1 in
-        --skip-setup)       SKIP_SETUP=true; shift ;;
-        --no-perf-profile)  PERF_PROFILE=false; shift ;;
-        --scenario)         SCENARIO="$2"; shift 2 ;;
+        --skip-setup)     SKIP_SETUP=true; shift ;;
+        --scenario)       SCENARIOS="$2"; shift 2 ;;
+        --versions)       VERSIONS_CSV="$2"; shift 2 ;;
+        --warmup)         WARMUP="$2"; shift 2 ;;
+        --cooldown)       COOLDOWN="$2"; shift 2 ;;
+        --repeats)        REPEATS="$2"; shift 2 ;;
+        --no-stats)       STATS=false; shift ;;
+        --stats-interval) STATS_INTERVAL="$2"; shift 2 ;;
+        --no-restart)     RESTART=false; shift ;;
+        --relaxed-breaker)    RELAXED_BREAKER=true; shift ;;
+        --no-relaxed-breaker) RELAXED_BREAKER=false; shift ;;
         *) echo "Opção desconhecida: $1"; exit 1 ;;
     esac
 done
 
+[[ "${REPEATS}" =~ ^[1-9][0-9]*$ ]] || { echo "--repeats inválido: ${REPEATS}"; exit 1; }
+IFS=',' read -r -a VERSIONS <<< "${VERSIONS_CSV}"
+for v in "${VERSIONS[@]}"; do
+    [[ "$v" =~ ^v[123]$ ]] || { echo "Versão inválida: $v (use v1, v2, v3)"; exit 1; }
+done
+
+# Definição dos cenários: nome|VUs|duração
+SCENARIO_DEFS=("baseline|1|30s" "load|20|2m" "stress|50|3m" "spike|150|1m")
+
+scenario_selected() {
+    [[ "${SCENARIOS}" == "all" ]] && return 0
+    [[ ",${SCENARIOS}," == *",$1,"* ]]
+}
+
 mkdir -p "${RAW_DIR}"
+
+HAS_JQ=false
+command -v jq >/dev/null 2>&1 && HAS_JQ=true
+
+# ── Helpers ─────────────────────────────────────────────────────────────────
 
 log() { echo "[$(date '+%H:%M:%S')] $*"; }
 
-# ── Perfil de performance do orquestrador ─────────────────────────────────────
-
-wait_orchestrator_healthy() {
-    local status="" i
-    for i in $(seq 1 40); do
-        status="$(docker inspect -f '{{.State.Health.Status}}' "${ORCH_CONTAINER}" 2>/dev/null || true)"
-        [[ "${status}" == "healthy" ]] && return 0
-        sleep 5
+# Espera o container do orquestrador ficar healthy (timeout em segundos)
+wait_healthy() {
+    local timeout="${1:-180}" waited=0 st
+    while (( waited < timeout )); do
+        st="$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' "${ORCH_CONTAINER}" 2>/dev/null || echo missing)"
+        [[ "${st}" == "healthy" || "${st}" == "running" ]] && return 0
+        sleep 3; waited=$(( waited + 3 ))
     done
-    log "Orquestrador não ficou healthy (último estado: ${status:-desconhecido})"
+    log "AVISO: ${ORCH_CONTAINER} não ficou healthy em ${timeout}s (status: ${st:-?})"
     return 1
 }
 
-recreate_orchestrator() {
-    # Recria WireMock e orquestrador (o perfil muda a capacidade do stub e o circuit breaker).
-    # $@ = arquivos -f adicionais
-    (cd "${REPO_ROOT}" && docker compose -p "${COMPOSE_PROJECT}" -f "${COMPOSE_FILE}" "$@" \
-        up -d --no-deps --force-recreate wiremock orchestrator) >/dev/null
-    wait_orchestrator_healthy
+# Espera CPU ociosa: 2 amostras consecutivas de docker stats < IDLE_CPU_MAX %
+wait_idle() {
+    local waited=0 ok=0 cpu
+    while (( waited < IDLE_TIMEOUT )); do
+        cpu="$(docker stats --no-stream --format '{{.CPUPerc}}' "${ORCH_CONTAINER}" 2>/dev/null | tr -d '%' || true)"
+        if [[ -n "${cpu}" ]] && awk -v c="${cpu}" -v m="${IDLE_CPU_MAX}" 'BEGIN{exit !(c+0 < m+0)}'; then
+            ok=$(( ok + 1 )); (( ok >= 2 )) && return 0
+        else
+            ok=0
+        fi
+        sleep 2; waited=$(( waited + 3 ))
+    done
+    log "AVISO: CPU do ${ORCH_CONTAINER} não ficou < ${IDLE_CPU_MAX}% em ${IDLE_TIMEOUT}s — seguindo"
+    return 0
 }
 
-restore_orchestrator() {
-    if [[ "${PERF_PROFILE}" == true ]]; then
-        log "Restaurando a configuração normal do orquestrador…"
-        recreate_orchestrator || true
-    fi
+# Reinicia o orquestrador (estado limpo do circuit breaker, sem requests pendentes)
+restart_orchestrator() {
+    [[ "${RESTART}" == true ]] || return 0
+    log "reiniciando ${ORCH_CONTAINER} (estado limpo)"
+    docker restart "${ORCH_CONTAINER}" >/dev/null
+    wait_healthy 180 || true
+    wait_idle
 }
 
-if [[ "${PERF_PROFILE}" == true ]]; then
-    log "Aplicando perfil de performance no orquestrador (circuit breaker sem abrir por chamada lenta)…"
-    trap restore_orchestrator EXIT
-    recreate_orchestrator -f "${PERF_COMPOSE_FILE}"
-else
-    log "Perfil de performance desligado: o circuit breaker usa a configuração padrão do application.yml."
-fi
+compose_cmd() {
+    ( cd "${REPO_ROOT}" && docker compose -p "${COMPOSE_PROJECT}" ${COMPOSE_ENV_FILE:+--env-file "${COMPOSE_ENV_FILE}"} -f docker-compose-service-portal.yml "$@" )
+}
 
-# ── Execução ──────────────────────────────────────────────────────────────────
+# Recria o orquestrador com o override do breaker (uma vez, no início)
+apply_relaxed_breaker() {
+    [[ "${RELAXED_BREAKER}" == true ]] || return 0
+    log "aplicando override do circuit breaker (${BREAKER_ENV_VAR}=3000) e recriando o orquestrador"
+    compose_cmd -f "${BREAKER_OVERRIDE_FILE}" up -d --no-build orchestrator
+    wait_healthy 240 || true
+    wait_idle
+}
 
 FAILED_RUNS=()
 
+# Executa k6. $5 = "measure" (gera log/json) ou "warmup" (descarta saída).
 run_k6() {
-    local version="$1"   # v1 | v2
-    local vus="$2"
-    local duration="$3"
-    local label="$4"
-    local min_success="${5:-0.99}"
-    local p95_max="${6:-8000}"
-    local out="${RAW_DIR}/${label}-${version}.txt"
-    local rc=0
+    local version="$1" vus="$2" duration="$3" label="$4" mode="$5"
+    local min_success="${6:-0.99}" p95_max="${7:-8000}"
+    # label = <cenario>-<versao>-r<N>
+    local out="${RAW_DIR}/${label}.txt"
+    local summary="${label}.json"
+    local wvus=$(( vus > 10 ? 10 : vus ))
+
+    if [[ "${mode}" == "warmup" ]]; then
+        log "warm-up ${label} — VUS=${wvus} DURATION=${duration}"
+        docker run --rm --network "${NETWORK}" \
+            -v "${SCRIPT_DIR}:/scripts:ro" \
+            -e API_VERSION="${version}" \
+            -e VUS="${wvus}" \
+            -e DURATION="${duration}" \
+            -e MIN_SUCCESS=0 \
+            "${K6_IMAGE}" run --quiet /scripts/orchestrator-test.js >/dev/null 2>&1 || true
+        return 0
+    fi
 
     log "k6 ${label} — API_VERSION=${version} VUS=${vus} DURATION=${duration}"
+    rm -f "${RAW_DIR:?}/${summary:?}"
+
+    # Limiar violado (exit 99: SUCCESS abaixo do mínimo ou p95 acima do teto) invalida a medição:
+    # o runner segue para os demais cenários, marca FALHOU no relatório e sai com 1 no fim.
+    local rc=0
     set +e
-    docker run --rm \
-        --network "${NETWORK}" \
+    docker run --rm --network "${NETWORK}" \
+        --user "$(id -u):$(id -g)" \
         -v "${SCRIPT_DIR}:/scripts:ro" \
+        -v "${RAW_DIR}:/out" \
         -e API_VERSION="${version}" \
         -e VUS="${vus}" \
         -e DURATION="${duration}" \
         -e MIN_SUCCESS="${min_success}" \
         -e P95_MAX_MS="${p95_max}" \
-        "${K6_IMAGE}" run /scripts/orchestrator-test.js \
+        "${K6_IMAGE}" run --summary-export "/out/${summary}" /scripts/orchestrator-test.js \
         2>&1 | tee "${out}"
     rc="${PIPESTATUS[0]}"
     set -e
-
     if [[ "${rc}" != "0" ]]; then
-        log "⚠ k6 ${label}-${version} terminou com código ${rc} (limiar violado ou erro de execução)"
-        FAILED_RUNS+=("${label}-${version}")
+        log "k6 ${label} terminou com código ${rc} (limiar violado ou erro de execução)"
+        FAILED_RUNS+=("${label}")
     fi
+
     log "Resultado salvo em ${out}"
 }
 
-# ── Extração de métricas do resumo do k6 ──────────────────────────────────────
+# ── Coleta de docker stats ───────────────────────────────────────────────────
 
-strip_ansi() { sed 's/\x1b\[[0-9;]*m//g' "$1" | tr '\r' '\n'; }
+STATS_PID=""
 
-# Linha de resumo "http_req_duration....: avg=… p(95)=…" (a primeira, sem o filtro expected_response).
-duration_line() {
-    strip_ansi "$1" | grep -E '^\s*http_req_duration\.+:' | head -1
+start_stats() {
+    local file="$1"
+    [[ "${STATS}" == true ]] || return 0
+    docker inspect "${ORCH_CONTAINER}" >/dev/null 2>&1 || { log "Container ${ORCH_CONTAINER} não encontrado — sem docker stats"; return 0; }
+    : > "${file}"
+    (
+        while true; do
+            docker stats --no-stream --format '{{.CPUPerc}};{{.MemUsage}}' "${ORCH_CONTAINER}" >> "${file}" 2>/dev/null || true
+            sleep "${STATS_INTERVAL}"
+        done
+    ) &
+    STATS_PID=$!
 }
 
-metric_from_line() {
-    # $1 = linha, $2 = chave (avg | p(95))
-    local key="${2//(/\\(}"; key="${key//)/\\)}"
-    echo "$1" | grep -oE "${key}=[0-9.]+(µs|ms|s)" | head -1 | cut -d= -f2
+stop_stats() {
+    if [[ -n "${STATS_PID}" ]]; then
+        kill "${STATS_PID}" 2>/dev/null || true
+        wait "${STATS_PID}" 2>/dev/null || true
+        STATS_PID=""
+    fi
 }
+trap stop_stats EXIT
 
-to_ms() {
-    # converte 513.55ms | 3.08s | 36µs para milissegundos (número)
+# Converte "123.4MiB" / "1.2GiB" / "800kB" em MiB
+to_mib() {
     awk -v v="$1" 'BEGIN{
-        if (v ~ /µs$/) { sub(/µs$/,"",v); printf "%.2f", v/1000 }
-        else if (v ~ /ms$/) { sub(/ms$/,"",v); printf "%.2f", v }
-        else if (v ~ /s$/) { sub(/s$/,"",v); printf "%.2f", v*1000 }
-        else print "0" }'
+        n=v+0; u=v; gsub(/[0-9.]/,"",u)
+        if(u=="GiB")n*=1024; else if(u=="KiB"||u=="kB")n/=1024; else if(u=="B")n/=1048576
+        printf "%.0f", n }'
 }
 
-extract_reqs()    { strip_ansi "$1" | grep -E '^\s*http_reqs\.+:' | head -1 | grep -oE ':\s+[0-9]+' | grep -oE '[0-9]+' || echo "n/a"; }
-extract_errors()  { strip_ansi "$1" | grep -E '^\s*http_req_failed\.+:' | head -1 | grep -oE '[0-9.]+%' | head -1 || echo "n/a"; }
-extract_success() { strip_ansi "$1" | grep -E '^\s*workflow_success\.+:' | head -1 | grep -oE '[0-9.]+%' | head -1 || echo "n/a"; }
+# Saída: "cpu_avg% cpu_max% mem_max_MiB" ou "n/a n/a n/a"
+stats_summary() {
+    local file="$1"
+    [[ -s "${file}" ]] || { echo "n/a n/a n/a"; return; }
+    local cpu_avg cpu_max mem_max=0 mem usage
+    read -r cpu_avg cpu_max < <(cut -d';' -f1 "${file}" | tr -d '%' | \
+        awk 'NF{s+=$1;n++; if($1>m)m=$1} END{ if(n) printf "%.0f %.0f\n", s/n, m; else print "n/a n/a" }')
+    while IFS=';' read -r _ usage; do
+        mem="$(to_mib "$(echo "${usage}" | awk '{print $1}')")"
+        (( mem > mem_max )) && mem_max="${mem}"
+    done < "${file}"
+    echo "${cpu_avg}% ${cpu_max}% ${mem_max}"
+}
+
+# ── Parsing do --summary-export (jq ou fallback grep/sed) ────────────────────
+
+# Aceita formato legado (campos planos) e novo (dentro de "values")
+json_trend() {   # arquivo métrica campo → valor numérico (ms) ou vazio
+    local file="$1" metric="$2" field="$3"
+    [[ -s "${file}" ]] || return 0
+    if [[ "${HAS_JQ}" == true ]]; then
+        jq -r --arg m "${metric}" --arg f "${field}" \
+            '.metrics[$m] | (.[$f] // .values[$f]) // empty' "${file}" 2>/dev/null || true
+    else
+        tr -d ' \n\t' < "${file}" | sed -n "s/.*\"${metric}\":{\([^}]*\)}.*/\1/p" | \
+            tr ',' '\n' | grep -F "\"${field}\":" | head -1 | sed 's/.*://' || true
+    fi
+}
+
+json_count() {   # http_reqs
+    local file="$1"
+    [[ -s "${file}" ]] || return 0
+    if [[ "${HAS_JQ}" == true ]]; then
+        jq -r '.metrics.http_reqs | (.count // .values.count) // empty' "${file}" 2>/dev/null || true
+    else
+        tr -d ' \n\t' < "${file}" | sed -n 's/.*"http_reqs":{\([^}]*\)}.*/\1/p' | \
+            tr ',' '\n' | grep -F '"count":' | head -1 | sed 's/.*://' || true
+    fi
+}
+
+json_fail_rate() {   # http_req_failed → fração 0..1
+    local file="$1"
+    [[ -s "${file}" ]] || return 0
+    if [[ "${HAS_JQ}" == true ]]; then
+        jq -r '.metrics.http_req_failed | (.value // .values.rate) // empty' "${file}" 2>/dev/null || true
+    else
+        # "value" vem depois do objeto aninhado "thresholds" ({...}), então não dá para
+        # cortar no primeiro "}": lê a partir do bloco e pega o primeiro value/rate.
+        tr -d ' \n\t' < "${file}" | grep -o '"http_req_failed":{.*' | \
+            grep -oE '"(value|rate)":[0-9.eE+-]+' | head -1 | sed 's/.*://' || true
+    fi
+}
+
+json_success_rate() {   # workflow_success → fração 0..1 (vazio se a métrica não existe)
+    local file="$1"
+    [[ -s "${file}" ]] || return 0
+    if [[ "${HAS_JQ}" == true ]]; then
+        jq -r '.metrics.workflow_success | (.value // .values.rate) // empty' "${file}" 2>/dev/null || true
+    else
+        tr -d ' \n\t' < "${file}" | grep -o '"workflow_success":{.*' | \
+            grep -oE '"(value|rate)":[0-9.eE+-]+' | head -1 | sed 's/.*://' || true
+    fi
+}
+
+fmt_ms() { if [[ -n "${1:-}" ]]; then awk -v v="$1" 'BEGIN{printf "%.0f ms", v}'; else echo "n/a"; fi; }
+fmt_pct() { if [[ -n "${1:-}" ]]; then awk -v v="$1" 'BEGIN{printf "%.2f%%", v*100}'; else echo "n/a"; fi; }
+
+# razão a/b com "×"; n/a se faltar dado
+ratio() {
+    local a="${1:-}" b="${2:-}"
+    [[ -n "${a}" && -n "${b}" ]] || { echo "n/a"; return; }
+    awk -v a="${a}" -v b="${b}" 'BEGIN{ if(b+0>0) printf "%.2f×", a/b; else print "n/a" }'
+}
+
+# ── Setup ────────────────────────────────────────────────────────────────────
 
 if [[ "${SKIP_SETUP}" == false ]]; then
     log "Criando/verificando perf-test-flow no Manager…"
     "${SCRIPT_DIR}/setup-perf-flow.sh"
 fi
 
+if [[ "${RELAXED_BREAKER}" == true ]]; then apply_relaxed_breaker; fi
+
+# ── Execução dos cenários ────────────────────────────────────────────────────
+
 run_scenario() {
-    local name="$1"; local vus="$2"; local duration="$3"
-    local min_success="${4:-0.99}"; local p95_max="${5:-8000}"
-    [[ "${SCENARIO}" == "all" || "${SCENARIO}" == "${name}" ]] || return 0
-    log "=== Cenário: ${name} (${vus} VUs × ${duration}; SUCCESS > ${min_success}, p95 < ${p95_max} ms) ==="
-    run_k6 "v1" "${vus}" "${duration}" "${name}" "${min_success}" "${p95_max}"
-    run_k6 "v2" "${vus}" "${duration}" "${name}" "${min_success}" "${p95_max}"
+    local name="$1" vus="$2" duration="$3"
+    # Stress e spike procuram a saturação: limiares frouxos (SUCCESS > 80%, p95 < 30 s).
+    local min_success=0.99 p95_max=8000
+    if [[ "${name}" == "stress" || "${name}" == "spike" ]]; then min_success=0.80; p95_max=30000; fi
+    scenario_selected "${name}" || return 0
+
+    log "=== Cenário: ${name} (${vus} VUs × ${duration}) — versões: ${VERSIONS[*]} × ${REPEATS} repetição(ões) ==="
+    # Remove raw de execuções anteriores deste cenário/versões (evita misturar repetições antigas)
+    local v rep label first=true
+    for v in "${VERSIONS[@]}"; do
+        find "${RAW_DIR}" -maxdepth 1 -name "${name}-${v}-r*" -delete
+    done
+    # Repetição no laço externo: v1→v2→v3, depois de novo v1→v2→v3 (reduz viés de ordem/deriva)
+    for (( rep = 1; rep <= REPEATS; rep++ )); do
+        for v in "${VERSIONS[@]}"; do
+            if [[ "${first}" == false && "${COOLDOWN}" -gt 0 ]]; then
+                log "cooldown ${COOLDOWN}s"; sleep "${COOLDOWN}"
+            fi
+            first=false
+            label="${name}-${v}-r${rep}"
+            restart_orchestrator
+            if [[ "${WARMUP}" != "0" ]]; then
+                run_k6 "${v}" "${vus}" "${WARMUP}" "${label}" warmup
+            fi
+            # o warm-up deixa o JIT quente, mas também requests/breaker; recomeça limpo
+            if [[ "${WARMUP}" != "0" ]]; then restart_orchestrator; fi
+            start_stats "${RAW_DIR}/${label}.stats"
+            run_k6 "${v}" "${vus}" "${duration}" "${label}" measure "${min_success}" "${p95_max}"
+            stop_stats
+        done
+    done
+    if [[ "${COOLDOWN}" -gt 0 ]]; then log "cooldown ${COOLDOWN}s"; sleep "${COOLDOWN}"; fi
+    return 0
 }
 
-run_scenario "baseline" 1  "30s"
-run_scenario "load"     20 "2m"
-# Stress acha a saturação: limiares frouxos; o relatório marca "saturado" quando passa dos de aceite.
-run_scenario "stress"   50 "3m" 0.80 30000
+for def in "${SCENARIO_DEFS[@]}"; do
+    IFS='|' read -r n v d <<< "${def}"
+    run_scenario "${n}" "${v}" "${d}"
+done
 
-# ── Relatório ─────────────────────────────────────────────────────────────────
+# ── Geração do relatório ─────────────────────────────────────────────────────
 
 log "Gerando relatório em ${RESULTS_FILE}…"
 
 RUN_DATE="$(date '+%Y-%m-%d %H:%M:%S')"
-HOSTNAME="$(hostname)"
+HOST_NAME="$(hostname)"
 
-run_failed() {
-    local key="$1" f
-    for f in "${FAILED_RUNS[@]:-}"; do [[ "${f}" == "${key}" ]] && return 0; done
-    return 1
+# avg/p95 (mediana das repetições) por cenário/versão, guardados para os speedups
+declare -A AVG P95
+
+# Mediana dos números recebidos (ignora vazios); vazio se não houver nenhum
+median() {
+    local vals=()
+    local x
+    for x in "$@"; do [[ -n "${x}" ]] && vals+=("${x}"); done
+    (( ${#vals[@]} > 0 )) || return 0
+    printf '%s\n' "${vals[@]}" | sort -g | awk '{a[NR]=$1} END{ if(NR%2) print a[(NR+1)/2]; else print (a[NR/2]+a[NR/2+1])/2 }'
+}
+
+# Lista os arquivos de uma extensão das repetições de cenário/versão
+rep_files() {   # label version ext
+    local f
+    shopt -s nullglob
+    for f in "${RAW_DIR}/${1}-${2}-r"*."${3}"; do echo "${f}"; done
+    shopt -u nullglob
 }
 
 collect_row() {
     local label="$1" version="$2"
-    local file="${RAW_DIR}/${label}-${version}.txt"
-    [[ -f "${file}" ]] || { echo "| ${label} | ${version} | — | — | — | — | — | — |"; return; }
-    local line avg p95 reqs errs succ result
-    line="$(duration_line "${file}")"
-    avg="$(metric_from_line "${line}" 'avg')"
-    p95="$(metric_from_line "${line}" 'p(95)')"
-    reqs="$(extract_reqs "${file}")"
-    errs="$(extract_errors "${file}")"
-    succ="$(extract_success "${file}")"
-    if run_failed "${label}-${version}"; then
-        result="FALHOU"
-    else
-        # Passou dos limiares do cenário; "saturado" se ficou fora dos de aceite (SUCCESS ≥ 99%, p95 ≤ 8 s).
-        local succ_n p95_ms
-        succ_n="$(echo "${succ}" | tr -d '%')"
-        p95_ms="$(to_ms "${p95:-0}")"
-        if awk -v s="${succ_n:-0}" -v p="${p95_ms}" 'BEGIN{exit !(s < 99 || p > 8000)}'; then result="saturado"; else result="ok"; fi
-    fi
-    echo "| ${label} | ${version} | ${avg:-n/a} | ${p95:-n/a} | ${reqs} | ${errs} | ${succ} | ${result} |"
+    local files=() f
+    while IFS= read -r f; do [[ -s "${f}" ]] && files+=("${f}"); done < <(rep_files "${label}" "${version}" json)
+    if (( ${#files[@]} == 0 )); then echo "| ${label} | ${version} | — | — | — | — | — | 0 | — |"; return; fi
+    local avgs=() p95s=() reqs=() errs=() succs=()
+    for f in "${files[@]}"; do
+        avgs+=("$(json_trend "${f}" http_req_duration avg)")
+        p95s+=("$(json_trend "${f}" http_req_duration 'p(95)')")
+        reqs+=("$(json_count "${f}")")
+        errs+=("$(json_fail_rate "${f}")")
+        succs+=("$(json_success_rate "${f}")")
+    done
+    local avg p95 req err succ
+    avg="$(median "${avgs[@]}")"; p95="$(median "${p95s[@]}")"
+    req="$(median "${reqs[@]}")"; err="$(median "${errs[@]}")"; succ="$(median "${succs[@]}")"
+    AVG["${label}-${version}"]="${avg}"
+    P95["${label}-${version}"]="${p95}"
+    [[ -n "${req}" ]] && req="$(awk -v v="${req}" 'BEGIN{printf "%.0f", v}')"
+    # ok = dentro dos limiares de aceite; saturado = terminou, mas fora deles (esperado no stress/spike);
+    # FALHOU = alguma repetição violou os limiares do cenário (k6 com código != 0)
+    local result="ok" fr
+    for fr in "${FAILED_RUNS[@]:-}"; do
+        [[ "${fr}" == "${label}-${version}-r"* ]] && result="FALHOU"
+    done
+    if [[ "${result}" == "ok" ]] && awk -v s="${succ:-0}" -v p="${p95:-0}" 'BEGIN{exit !(s < 0.99 || p > 8000)}'; then result="saturado"; fi
+    echo "| ${label} | ${version} | $(fmt_ms "${avg}") | $(fmt_ms "${p95}") | ${req:-n/a} | $(fmt_pct "${err}") | $(fmt_pct "${succ}") | ${#files[@]} | ${result} |"
 }
 
-collect_speedup() {
+speedup_row() {
     local label="$1"
-    local f1="${RAW_DIR}/${label}-v1.txt" f2="${RAW_DIR}/${label}-v2.txt"
-    [[ -f "${f1}" && -f "${f2}" ]] || return 0
-    local a1 a2 m1 m2
-    a1="$(metric_from_line "$(duration_line "${f1}")" 'avg')"
-    a2="$(metric_from_line "$(duration_line "${f2}")" 'avg')"
-    [[ -n "${a1}" && -n "${a2}" ]] || return 0
-    m1="$(to_ms "${a1}")"; m2="$(to_ms "${a2}")"
-    awk -v l="${label}" -v a="${a1}" -v b="${a2}" -v x="${m1}" -v y="${m2}" \
-        'BEGIN{ if (y > 0) printf "| %s | %s | %s | %.1f× |\n", l, a, b, x/y }'
+    echo "| ${label} | $(ratio "${AVG[${label}-v1]:-}" "${AVG[${label}-v2]:-}") | $(ratio "${AVG[${label}-v1]:-}" "${AVG[${label}-v3]:-}") | $(ratio "${AVG[${label}-v2]:-}" "${AVG[${label}-v3]:-}") | $(ratio "${P95[${label}-v2]:-}" "${P95[${label}-v3]:-}") |"
 }
+
+stats_row() {
+    local label="$1" version="$2" f
+    local cas=() cms=() mms=() ca cm mm
+    while IFS= read -r f; do
+        [[ -s "${f}" ]] || continue
+        read -r ca cm mm <<< "$(stats_summary "${f}")"
+        cas+=("${ca%\%}"); cms+=("${cm%\%}"); mms+=("${mm}")
+    done < <(rep_files "${label}" "${version}" stats)
+    (( ${#cas[@]} > 0 )) || return 0
+    echo "| ${label} | ${version} | $(median "${cas[@]}")% | $(median "${cms[@]}")% | $(median "${mms[@]}") MiB |"
+}
+
+# Cenários presentes no disco (inclui execuções anteriores com --scenario parcial)
+REPORT_SCENARIOS=()
+for def in "${SCENARIO_DEFS[@]}"; do
+    n="${def%%|*}"
+    if compgen -G "${RAW_DIR}/${n}-v*-r*.json" >/dev/null; then REPORT_SCENARIOS+=("${n}"); fi
+done
 
 {
 cat <<HEADER
-# Resultados de Performance — Orquestrador v1 vs v2
+# Resultados de Performance — Orquestrador v1 × v2 × v3
 
-> Gerado em: ${RUN_DATE} | Host: ${HOSTNAME} | Perfil de performance: $([[ "${PERF_PROFILE}" == true ]] && echo "ligado" || echo "desligado")
+> Gerado em: ${RUN_DATE} | Host: ${HOST_NAME}
 
 ## Configuração do Teste
 
@@ -238,41 +493,82 @@ cat <<HEADER
 | Workflow | \`perf-test-flow\` |
 | Integrações | 6 × HTTP (mesmo \`order: 1\`, stub WireMock ~500 ms) |
 | Modelo v1 | Sequencial — 1 integração por vez |
-| Modelo v2 | Paralelo — Java Virtual Threads por grupo de \`order\` |
+| Modelo v2 | Paralelo por \`order\` — **threads físicas** em pool fixo compartilhado |
+| Modelo v3 | Paralelo por \`order\` — **Java Virtual Threads** (1 por tarefa) |
+| Pool v2 (core / max) | ${POOL_CORE} / ${POOL_MAX} (prefixo \`orch-v2-\`) |
+| Pool v2 (fila) | ${POOL_QUEUE} |
+| Pool v2 (saturação) | ${POOL_POLICY} |
+| Métrica do pool (Micrometer) | ${POOL_METRIC_NOTE:-não informada (opcional)} |
+| Versões executadas | ${VERSIONS[*]} |
+| Warm-up / cooldown | ${WARMUP} / ${COOLDOWN}s |
+| Repetições | ${REPEATS} por cenário×versão (mediana), ordem v1→v2→v3 intercalada por repetição |
+| Reinício entre execuções | $([[ "${RESTART}" == true ]] && echo "sim — \`docker restart ${ORCH_CONTAINER}\` + healthy + CPU < ${IDLE_CPU_MAX}% antes de cada warm-up e medição" || echo "não (--no-restart): estado do breaker e requests pendentes podem contaminar") |
+| Circuit breaker | $([[ "${RELAXED_BREAKER}" == true ]] && echo "**relaxado**: \`slow-call-duration-threshold\` = 3000 ms via \`${BREAKER_ENV_VAR}=3000\` (default da app: 800 ms)" || echo "default da aplicação (override não aplicado pelo runner; \`slow-call-duration-threshold\` = 800 ms salvo configuração manual)") |
 | Ferramenta | k6 (Docker \`${K6_IMAGE}\`) |
 | Rede Docker | \`${NETWORK}\` |
-| Circuit breaker | $([[ "${PERF_PROFILE}" == true ]] && echo "slow-call-duration-threshold elevado por \`docker-compose.perf.yml\`" || echo "configuração padrão do application.yml") |
-| Stub WireMock | $([[ "${PERF_PROFILE}" == true ]] && echo "pool de 400 threads e resposta assíncrona (\`docker-compose.perf.yml\`)" || echo "configuração padrão (~40 chamadas/s com o stub de 500 ms)") |
+
+## Cenários
+
+| Nome | VUs | Duração |
+|---|---|---|
+HEADER
+
+for def in "${SCENARIO_DEFS[@]}"; do
+    IFS='|' read -r n v d <<< "${def}"
+    echo "| ${n} | ${v} | ${d} |"
+done
+
+cat <<TABLE_HEAD
 
 ## Resultados
 
-\`SUCCESS\` é a fração de respostas com \`"status":"SUCCESS"\` no corpo (limiar do k6: acima de 99%).
-O orquestrador responde HTTP 200 mesmo quando o fluxo falha, então \`Erros\` (transporte) não basta.
-Um cenário com \`SUCCESS\` baixo mede respostas de erro rápidas e **não** vale como medida de capacidade.
+Valores = **mediana** das repetições (coluna Reps); cada repetição fica em \`docs/performance/raw/<cenario>-<versao>-r<N>.*\`.
 
-\`Resultado\`: \`ok\` cumpre SUCCESS ≥ 99% e p95 ≤ 8 s; \`saturado\` terminou, mas fora desses limites (esperado no stress, que procura o ponto de saturação); \`FALHOU\` violou os limiares do cenário (stress: SUCCESS > 80% e p95 < 30 s).
+\`Resultado\`: \`ok\` cumpre Sucesso ≥ 99% e p95 ≤ 8 s; \`saturado\` terminou, mas fora desses limites (esperado no stress e no spike, que procuram a saturação); \`FALHOU\` violou os limiares do cenário (stress/spike: Sucesso > 80% e p95 < 30 s) e o runner sai com código 1.
 
-| Cenário | Versão | Latência avg | Latência P95 | Total reqs | Erros | SUCCESS | Resultado |
-|---|---|---|---|---|---|---|---|
-HEADER
+| Cenário | Versão | Latência avg | Latência P95 | Total reqs | Erros (HTTP) | Sucesso (flows) | Reps | Resultado |
+|---|---|---|---|---|---|---|---|---|
+TABLE_HEAD
 
-collect_row "baseline" "v1"
-collect_row "baseline" "v2"
-collect_row "load"     "v1"
-collect_row "load"     "v2"
-collect_row "stress"   "v1"
-collect_row "stress"   "v2"
+for s in "${REPORT_SCENARIOS[@]}"; do
+    for v in v1 v2 v3; do collect_row "${s}" "${v}"; done
+done
 
-cat <<SPEEDUP
+cat <<SPEED_HEAD
 
-### Speedup do v2 sobre o v1 (latência média)
+### Speedup (razão entre as medianas de latência avg)
 
-| Cenário | v1 avg | v2 avg | Speedup |
-|---|---|---|---|
-$(collect_speedup baseline)
-$(collect_speedup load)
-$(collect_speedup stress)
-SPEEDUP
+| Cenário | v2 vs v1 | v3 vs v1 | v3 vs v2 (avg) | v3 vs v2 (P95) |
+|---|---|---|---|---|
+SPEED_HEAD
+
+for s in "${REPORT_SCENARIOS[@]}"; do speedup_row "${s}"; done
+
+cat <<'SPEED_NOTE'
+
+> **A latência só é comparável quando Sucesso (flows) = 100%.** O orquestrador responde
+> HTTP 200 mesmo com flow `FAILED` no corpo, então a coluna Erros (HTTP) não revela essas
+> falhas; flows falhos (ex.: breaker aberto) distorcem a latência.
+> Linhas com Sucesso < 100% devem ser lidas como "versão degradou", não como speedup.
+>
+> "v2 vs v1" e "v3 vs v1" = quantas vezes a versão é mais rápida que a v1;
+> "v3 vs v2" > 1× = v3 mais rápida que a v2. "n/a" = versão não executada.
+SPEED_NOTE
+
+STATS_LINES=""
+for s in "${REPORT_SCENARIOS[@]}"; do
+    for v in v1 v2 v3; do STATS_LINES+="$(stats_row "${s}" "${v}")"$'\n'; done
+done
+if [[ -n "${STATS_LINES//[$'\n ']/}" ]]; then
+cat <<STATS_HEAD
+
+### Recursos do container \`${ORCH_CONTAINER}\` (docker stats, amostras a cada ${STATS_INTERVAL}s; mediana das repetições)
+
+| Cenário | Versão | CPU média | CPU máx | Memória máx |
+|---|---|---|---|---|
+STATS_HEAD
+printf '%s' "${STATS_LINES}"
+fi
 
 cat <<ANALYSIS
 
@@ -283,22 +579,25 @@ cat <<ANALYSIS
 | Modelo | 6 steps × 500ms | Motivo |
 |---|---|---|
 | v1 sequencial | ~3 000 ms | Cada integração espera a anterior terminar |
-| v2 paralelo   | ~500 ms   | Todas as 6 do mesmo \`order\` disparam juntas |
-
-**Speedup esperado: ~6×** para workflows com 6 integrações de I/O-bound no mesmo passo.
+| v2 threads físicas | ~500 ms | As 6 do mesmo \`order\` disparam juntas, enquanto houver thread livre no pool |
+| v3 virtual threads | ~500 ms | As 6 disparam juntas; sem limite prático de threads |
 
 ### Interpretação
 
-- **Baseline (1 VU)**: confirma o speedup mínimo sem contenção de recursos.
-- **Load (20 VUs)**: avalia se o pool de conexões do WebClient/Netty sustenta a paralelização.
-- **Stress (50 VUs)**: identifica o ponto de saturação onde v2 começa a convergir com v1 por esgotamento de threads ou conexões.
+- **v1** é o piso: latência ≈ soma das integrações, independente do pool.
+- **Baseline (1 VU)**: confirma o speedup (~6×) de v2 e v3 sem contenção.
+- **Load (20 VUs)**: 20 × 6 = 120 tarefas simultâneas, abaixo do pool de ${POOL_MAX}; v2 e v3 devem ser equivalentes.
+- **Stress (50 VUs)**: 50 × 6 = 300 tarefas simultâneas, acima de ${POOL_MAX} threads — a v2 começa a saturar o pool.
+- **Spike (150 VUs)**: 900 tarefas simultâneas; a v2 deve degradar conforme a política de saturação (${POOL_POLICY}: execução na thread da request, perdendo paralelismo), enquanto a v3 não depende de pool.
+- Se a v3 também degradar, o gargalo provavelmente está fora do modelo de threads (\`block()\` do WebClient em \`HttpIntegrationExecutor\`, limite do WireMock, CPU do host) — registrar e investigar.
+- Observação: \`docker stats\` mede o container inteiro; para threads ativas/fila do pool v2 use o Grafana/Prometheus (métricas \`ExecutorServiceMetrics\`).
 
 ### Logs brutos
 
-Os logs completos de cada execução k6 estão em \`docs/performance/raw/\`:
+Os logs e summaries de cada execução k6 estão em \`docs/performance/raw/\`:
 
 \`\`\`
-$(ls "${RAW_DIR}"/*.txt 2>/dev/null | xargs -I{} basename {} || echo "(nenhum log encontrado)")
+$(cd "${RAW_DIR}" && ls ./*.txt ./*.json 2>/dev/null | sed 's|^\./||' || echo "(nenhum log encontrado)")
 \`\`\`
 
 ## Como reproduzir
@@ -307,23 +606,30 @@ $(ls "${RAW_DIR}"/*.txt 2>/dev/null | xargs -I{} basename {} || echo "(nenhum lo
 # Subir a stack (se não estiver rodando)
 docker compose -f docker-compose-service-portal.yml up -d
 
-# Executar todos os cenários (aplica e restaura o perfil de performance sozinho)
+# Todos os cenários, v1 → v2 → v3
 ./tests/performance/run-perf-test.sh
 
-# Cenário específico (sem recriar o workflow)
-./tests/performance/run-perf-test.sh --skip-setup --scenario load
+# Só o spike, comparando v2 e v3, sem recriar o workflow
+./tests/performance/run-perf-test.sh --skip-setup --scenario spike --versions v2,v3
+\`\`\`
 
-# Medir com a configuração padrão do circuit breaker
-./tests/performance/run-perf-test.sh --no-perf-profile
+### Circuit breaker relaxado e reinício
+
+$([[ "${RELAXED_BREAKER}" == true ]] && echo "Esta rodada aplicou o override \`tests/performance/compose.perf.override.yml\` (\`${BREAKER_ENV_VAR}=3000\`). **A stack ficou com o override ativo**; para remover:" || echo "O override do breaker não foi aplicado pelo runner. Para aplicar/remover manualmente:")
+
+\`\`\`bash
+# aplicar (slow-call-duration-threshold = 3000 ms)
+docker compose -f docker-compose-service-portal.yml -f tests/performance/compose.perf.override.yml up -d --no-build orchestrator
+# remover (volta ao default de 800 ms)
+docker compose -f docker-compose-service-portal.yml up -d --no-build orchestrator
 \`\`\`
 ANALYSIS
 } > "${RESULTS_FILE}"
 
-log "✅ Relatório gerado: ${RESULTS_FILE}"
-
+log "Relatório gerado: ${RESULTS_FILE}"
 if [[ ${#FAILED_RUNS[@]} -gt 0 ]]; then
-    log "❌ Execuções que violaram limiares: ${FAILED_RUNS[*]}"
+    log "Execuções que violaram limiares: ${FAILED_RUNS[*]}"
     exit 1
 fi
 
-log "✅ Benchmark concluído."
+log "Benchmark concluído."
