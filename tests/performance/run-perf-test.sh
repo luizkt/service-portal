@@ -29,9 +29,35 @@
 #                           raw em <cenario>-<versao>-r<N>.{txt,json,stats} [2]
 #   --no-stats              desliga a coleta de docker stats
 #   --stats-interval SEG    intervalo do docker stats             [5]
+#   --no-restart            NÃO reinicia o orquestrador antes de cada execução.
+#                           Por padrão, antes do warm-up e de cada execução medida
+#                           roda `docker restart ${ORCH_CONTAINER}`, espera healthy e
+#                           aguarda CPU ociosa (<10% em 2 amostras seguidas de
+#                           docker stats, timeout 120s). Isso zera o estado do circuit
+#                           breaker (por id de integração) e descarta requests
+#                           pendentes da rodada anterior, evitando contaminação.
+#   --relaxed-breaker       (default) recria o orquestrador UMA vez no início com o
+#   --no-relaxed-breaker    override tests/performance/compose.perf.override.yml, que
+#                           define slow-call-duration-threshold=3000 ms (default da
+#                           app: 800 ms; o stub responde em ~500 ms e, sob carga, o
+#                           breaker abriria por 30 s e derrubaria os flows). Assim o
+#                           benchmark mede concorrência, não o ajuste do breaker.
+#                           --no-relaxed-breaker não aplica o override (e não o remove).
+#
+# Circuit breaker relaxado — aplicar/remover manualmente:
+#   variável: ORCHINTEGRATIONS_CIRCUITBREAKERCONFIGURATION_SLOWCALLDURATIONTHRESHOLD=3000
+#   aplicar:  docker compose -f docker-compose-service-portal.yml \
+#               -f tests/performance/compose.perf.override.yml up -d --no-build orchestrator
+#   remover:  docker compose -f docker-compose-service-portal.yml up -d --no-build orchestrator
+#   ATENÇÃO: ao final o runner NÃO reverte; a stack fica com o override até você remover.
+#
+# Métrica de negócio: o orquestrador devolve HTTP 200 mesmo com flow FAILED no corpo;
+# por isso o k6 exporta workflow_success (HTTP 200 E "status":"SUCCESS"), mostrado como
+# "Sucesso (flows)". Latência só é comparável quando Sucesso = 100%.
 #
 # Variáveis de ambiente: ORCH_CONTAINER (portal-orchestrator), NETWORK,
-# K6_IMAGE, POOL_CORE/POOL_MAX/POOL_QUEUE/POOL_POLICY (informativo no
+# K6_IMAGE, COMPOSE_PROJECT (service-portal), IDLE_CPU_MAX (10, % de CPU para
+# considerar ocioso), IDLE_TIMEOUT (120, s), POOL_CORE/POOL_MAX/POOL_QUEUE/POOL_POLICY (informativo no
 # relatório; default 200/200/ver application.yml/CallerRunsPolicy),
 # POOL_METRIC_NOTE (nome da métrica Micrometer do pool v2, opcional).
 #
@@ -64,6 +90,13 @@ COOLDOWN=20
 REPEATS=2
 STATS=true
 STATS_INTERVAL=5
+RESTART=true
+RELAXED_BREAKER=true
+COMPOSE_PROJECT="${COMPOSE_PROJECT:-service-portal}"
+IDLE_CPU_MAX="${IDLE_CPU_MAX:-10}"
+IDLE_TIMEOUT="${IDLE_TIMEOUT:-120}"
+BREAKER_ENV_VAR="ORCHINTEGRATIONS_CIRCUITBREAKERCONFIGURATION_SLOWCALLDURATIONTHRESHOLD"
+BREAKER_OVERRIDE_FILE="${SCRIPT_DIR}/compose.perf.override.yml"
 
 while [[ $# -gt 0 ]]; do
     case $1 in
@@ -75,6 +108,9 @@ while [[ $# -gt 0 ]]; do
         --repeats)        REPEATS="$2"; shift 2 ;;
         --no-stats)       STATS=false; shift ;;
         --stats-interval) STATS_INTERVAL="$2"; shift 2 ;;
+        --no-restart)     RESTART=false; shift ;;
+        --relaxed-breaker)    RELAXED_BREAKER=true; shift ;;
+        --no-relaxed-breaker) RELAXED_BREAKER=false; shift ;;
         *) echo "Opção desconhecida: $1"; exit 1 ;;
     esac
 done
@@ -101,6 +137,56 @@ command -v jq >/dev/null 2>&1 && HAS_JQ=true
 # ── Helpers ─────────────────────────────────────────────────────────────────
 
 log() { echo "[$(date '+%H:%M:%S')] $*"; }
+
+# Espera o container do orquestrador ficar healthy (timeout em segundos)
+wait_healthy() {
+    local timeout="${1:-180}" waited=0 st
+    while (( waited < timeout )); do
+        st="$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' "${ORCH_CONTAINER}" 2>/dev/null || echo missing)"
+        [[ "${st}" == "healthy" || "${st}" == "running" ]] && return 0
+        sleep 3; waited=$(( waited + 3 ))
+    done
+    log "AVISO: ${ORCH_CONTAINER} não ficou healthy em ${timeout}s (status: ${st:-?})"
+    return 1
+}
+
+# Espera CPU ociosa: 2 amostras consecutivas de docker stats < IDLE_CPU_MAX %
+wait_idle() {
+    local waited=0 ok=0 cpu
+    while (( waited < IDLE_TIMEOUT )); do
+        cpu="$(docker stats --no-stream --format '{{.CPUPerc}}' "${ORCH_CONTAINER}" 2>/dev/null | tr -d '%' || true)"
+        if [[ -n "${cpu}" ]] && awk -v c="${cpu}" -v m="${IDLE_CPU_MAX}" 'BEGIN{exit !(c+0 < m+0)}'; then
+            ok=$(( ok + 1 )); (( ok >= 2 )) && return 0
+        else
+            ok=0
+        fi
+        sleep 2; waited=$(( waited + 3 ))
+    done
+    log "AVISO: CPU do ${ORCH_CONTAINER} não ficou < ${IDLE_CPU_MAX}% em ${IDLE_TIMEOUT}s — seguindo"
+    return 0
+}
+
+# Reinicia o orquestrador (estado limpo do circuit breaker, sem requests pendentes)
+restart_orchestrator() {
+    [[ "${RESTART}" == true ]] || return 0
+    log "reiniciando ${ORCH_CONTAINER} (estado limpo)"
+    docker restart "${ORCH_CONTAINER}" >/dev/null
+    wait_healthy 180 || true
+    wait_idle
+}
+
+compose_cmd() {
+    ( cd "${REPO_ROOT}" && docker compose -p "${COMPOSE_PROJECT}" -f docker-compose-service-portal.yml "$@" )
+}
+
+# Recria o orquestrador com o override do breaker (uma vez, no início)
+apply_relaxed_breaker() {
+    [[ "${RELAXED_BREAKER}" == true ]] || return 0
+    log "aplicando override do circuit breaker (${BREAKER_ENV_VAR}=3000) e recriando o orquestrador"
+    compose_cmd -f "${BREAKER_OVERRIDE_FILE}" up -d --no-build orchestrator
+    wait_healthy 240 || true
+    wait_idle
+}
 
 # Executa k6. $5 = "measure" (gera log/json) ou "warmup" (descarta saída).
 run_k6() {
@@ -226,6 +312,17 @@ json_fail_rate() {   # http_req_failed → fração 0..1
     fi
 }
 
+json_success_rate() {   # workflow_success → fração 0..1 (vazio se a métrica não existe)
+    local file="$1"
+    [[ -s "${file}" ]] || return 0
+    if [[ "${HAS_JQ}" == true ]]; then
+        jq -r '.metrics.workflow_success | (.value // .values.rate) // empty' "${file}" 2>/dev/null || true
+    else
+        tr -d ' \n\t' < "${file}" | grep -o '"workflow_success":{.*' | \
+            grep -oE '"(value|rate)":[0-9.eE+-]+' | head -1 | sed 's/.*://' || true
+    fi
+}
+
 fmt_ms() { if [[ -n "${1:-}" ]]; then awk -v v="$1" 'BEGIN{printf "%.0f ms", v}'; else echo "n/a"; fi; }
 fmt_pct() { if [[ -n "${1:-}" ]]; then awk -v v="$1" 'BEGIN{printf "%.2f%%", v*100}'; else echo "n/a"; fi; }
 
@@ -242,6 +339,8 @@ if [[ "${SKIP_SETUP}" == false ]]; then
     log "Criando/verificando perf-test-flow no Manager…"
     "${SCRIPT_DIR}/setup-perf-flow.sh"
 fi
+
+if [[ "${RELAXED_BREAKER}" == true ]]; then apply_relaxed_breaker; fi
 
 # ── Execução dos cenários ────────────────────────────────────────────────────
 
@@ -263,9 +362,12 @@ run_scenario() {
             fi
             first=false
             label="${name}-${v}-r${rep}"
+            restart_orchestrator
             if [[ "${WARMUP}" != "0" ]]; then
                 run_k6 "${v}" "${vus}" "${WARMUP}" "${label}" warmup
             fi
+            # o warm-up deixa o JIT quente, mas também requests/breaker; recomeça limpo
+            if [[ "${WARMUP}" != "0" ]]; then restart_orchestrator; fi
             start_stats "${RAW_DIR}/${label}.stats"
             run_k6 "${v}" "${vus}" "${duration}" "${label}" measure
             stop_stats
@@ -311,21 +413,22 @@ collect_row() {
     local label="$1" version="$2"
     local files=() f
     while IFS= read -r f; do [[ -s "${f}" ]] && files+=("${f}"); done < <(rep_files "${label}" "${version}" json)
-    if (( ${#files[@]} == 0 )); then echo "| ${label} | ${version} | — | — | — | — | 0 |"; return; fi
-    local avgs=() p95s=() reqs=() errs=()
+    if (( ${#files[@]} == 0 )); then echo "| ${label} | ${version} | — | — | — | — | — | 0 |"; return; fi
+    local avgs=() p95s=() reqs=() errs=() succs=()
     for f in "${files[@]}"; do
         avgs+=("$(json_trend "${f}" http_req_duration avg)")
         p95s+=("$(json_trend "${f}" http_req_duration 'p(95)')")
         reqs+=("$(json_count "${f}")")
         errs+=("$(json_fail_rate "${f}")")
+        succs+=("$(json_success_rate "${f}")")
     done
-    local avg p95 req err
+    local avg p95 req err succ
     avg="$(median "${avgs[@]}")"; p95="$(median "${p95s[@]}")"
-    req="$(median "${reqs[@]}")"; err="$(median "${errs[@]}")"
+    req="$(median "${reqs[@]}")"; err="$(median "${errs[@]}")"; succ="$(median "${succs[@]}")"
     AVG["${label}-${version}"]="${avg}"
     P95["${label}-${version}"]="${p95}"
     [[ -n "${req}" ]] && req="$(awk -v v="${req}" 'BEGIN{printf "%.0f", v}')"
-    echo "| ${label} | ${version} | $(fmt_ms "${avg}") | $(fmt_ms "${p95}") | ${req:-n/a} | $(fmt_pct "${err}") | ${#files[@]} |"
+    echo "| ${label} | ${version} | $(fmt_ms "${avg}") | $(fmt_ms "${p95}") | ${req:-n/a} | $(fmt_pct "${err}") | $(fmt_pct "${succ}") | ${#files[@]} |"
 }
 
 speedup_row() {
@@ -374,6 +477,8 @@ cat <<HEADER
 | Versões executadas | ${VERSIONS[*]} |
 | Warm-up / cooldown | ${WARMUP} / ${COOLDOWN}s |
 | Repetições | ${REPEATS} por cenário×versão (mediana), ordem v1→v2→v3 intercalada por repetição |
+| Reinício entre execuções | $([[ "${RESTART}" == true ]] && echo "sim — \`docker restart ${ORCH_CONTAINER}\` + healthy + CPU < ${IDLE_CPU_MAX}% antes de cada warm-up e medição" || echo "não (--no-restart): estado do breaker e requests pendentes podem contaminar") |
+| Circuit breaker | $([[ "${RELAXED_BREAKER}" == true ]] && echo "**relaxado**: \`slow-call-duration-threshold\` = 3000 ms via \`${BREAKER_ENV_VAR}=3000\` (default da app: 800 ms)" || echo "default da aplicação (override não aplicado pelo runner; \`slow-call-duration-threshold\` = 800 ms salvo configuração manual)") |
 | Ferramenta | k6 (Docker \`${K6_IMAGE}\`) |
 | Rede Docker | \`${NETWORK}\` |
 
@@ -394,8 +499,8 @@ cat <<TABLE_HEAD
 
 Valores = **mediana** das repetições (coluna Reps); cada repetição fica em \`docs/performance/raw/<cenario>-<versao>-r<N>.*\`.
 
-| Cenário | Versão | Latência avg | Latência P95 | Total reqs | Erros | Reps |
-|---|---|---|---|---|---|---|
+| Cenário | Versão | Latência avg | Latência P95 | Total reqs | Erros (HTTP) | Sucesso (flows) | Reps |
+|---|---|---|---|---|---|---|---|
 TABLE_HEAD
 
 for s in "${REPORT_SCENARIOS[@]}"; do
@@ -414,6 +519,11 @@ for s in "${REPORT_SCENARIOS[@]}"; do speedup_row "${s}"; done
 
 cat <<'SPEED_NOTE'
 
+> **A latência só é comparável quando Sucesso (flows) = 100%.** O orquestrador responde
+> HTTP 200 mesmo com flow `FAILED` no corpo, então a coluna Erros (HTTP) não revela essas
+> falhas; flows falhos (ex.: breaker aberto) distorcem a latência.
+> Linhas com Sucesso < 100% devem ser lidas como "versão degradou", não como speedup.
+>
 > "v2 vs v1" e "v3 vs v1" = quantas vezes a versão é mais rápida que a v1;
 > "v3 vs v2" > 1× = v3 mais rápida que a v2. "n/a" = versão não executada.
 SPEED_NOTE
@@ -474,6 +584,17 @@ docker compose -f docker-compose-service-portal.yml up -d
 
 # Só o spike, comparando v2 e v3, sem recriar o workflow
 ./tests/performance/run-perf-test.sh --skip-setup --scenario spike --versions v2,v3
+\`\`\`
+
+### Circuit breaker relaxado e reinício
+
+$([[ "${RELAXED_BREAKER}" == true ]] && echo "Esta rodada aplicou o override \`tests/performance/compose.perf.override.yml\` (\`${BREAKER_ENV_VAR}=3000\`). **A stack ficou com o override ativo**; para remover:" || echo "O override do breaker não foi aplicado pelo runner. Para aplicar/remover manualmente:")
+
+\`\`\`bash
+# aplicar (slow-call-duration-threshold = 3000 ms)
+docker compose -f docker-compose-service-portal.yml -f tests/performance/compose.perf.override.yml up -d --no-build orchestrator
+# remover (volta ao default de 800 ms)
+docker compose -f docker-compose-service-portal.yml up -d --no-build orchestrator
 \`\`\`
 ANALYSIS
 } > "${RESULTS_FILE}"
