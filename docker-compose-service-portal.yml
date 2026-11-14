@@ -380,7 +380,15 @@ services:
     restart: unless-stopped
     # Escuta na porta 80 para que os workflows usem URLs realistas sem porta
     # (ex.: http://api.exemplo.com/clients/...) resolvidas via alias de rede.
-    command: ["--port", "80", "--global-response-templating", "--verbose"]
+    # async-response: o fixedDelay (stub /slow, 500 ms) não bloqueia thread do Jetty;
+    # sem isso o stub satura em ~40 req/s e distorce o benchmark do orquestrador.
+    # Journal limitado: o padrão cresce sem limite durante testes de carga.
+    command:
+      - "--port=80"
+      - "--global-response-templating"
+      - "--async-response-enabled=true"
+      - "--async-response-threads=200"
+      - "--max-request-journal-entries=1000"
     healthcheck:
       test: ["CMD-SHELL", "curl -sf http://localhost:80/__admin/health || exit 1"]
       start_period: 10s
