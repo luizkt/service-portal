@@ -7,6 +7,11 @@
 #   orch-integrations.circuit-breaker-configuration.slow-call-duration-threshold
 # (relaxed binding do Spring Boot: sem hífens, maiúsculas, "." -> "_").
 #
+# Também reduz o log da aplicação de DEBUG para INFO: com DEBUG, cada passo gera várias linhas
+# no console e, com virtual threads, a escrita do Logback (OutputStreamAppender.writeBytes)
+# prende a carrier thread (jdk.VirtualThreadPinned medido no JFR: 184 eventos, 26 ms de
+# mediana), o que mede o custo de log e não a concorrência.
+#
 # Aplicar:
 #   docker compose -f docker-compose-service-portal.yml \
 #     -f tests/performance/compose.perf.override.yml up -d --no-build orchestrator
@@ -16,3 +21,4 @@ services:
   orchestrator:
     environment:
       ORCHINTEGRATIONS_CIRCUITBREAKERCONFIGURATION_SLOWCALLDURATIONTHRESHOLD: "3000"
+      LOGGING_LEVEL_COM_ORCHESTRATOR: "INFO"

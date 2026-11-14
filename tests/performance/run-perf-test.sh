@@ -56,7 +56,7 @@
 # "Sucesso (flows)". Latência só é comparável quando Sucesso = 100%.
 #
 # Variáveis de ambiente: ORCH_CONTAINER (portal-orchestrator), NETWORK,
-# K6_IMAGE, COMPOSE_PROJECT (service-portal), IDLE_CPU_MAX (10, % de CPU para
+# K6_IMAGE, COMPOSE_PROJECT (service-portal), COMPOSE_ENV_FILE (caminho do .env quando rodar de um worktree sem .env), IDLE_CPU_MAX (10, % de CPU para
 # considerar ocioso), IDLE_TIMEOUT (120, s), POOL_CORE/POOL_MAX/POOL_QUEUE/POOL_POLICY (informativo no
 # relatório; default 200/200/ver application.yml/CallerRunsPolicy),
 # POOL_METRIC_NOTE (nome da métrica Micrometer do pool v2, opcional).
@@ -176,7 +176,7 @@ restart_orchestrator() {
 }
 
 compose_cmd() {
-    ( cd "${REPO_ROOT}" && docker compose -p "${COMPOSE_PROJECT}" -f docker-compose-service-portal.yml "$@" )
+    ( cd "${REPO_ROOT}" && docker compose -p "${COMPOSE_PROJECT}" ${COMPOSE_ENV_FILE:+--env-file "${COMPOSE_ENV_FILE}"} -f docker-compose-service-portal.yml "$@" )
 }
 
 # Recria o orquestrador com o override do breaker (uma vez, no início)
