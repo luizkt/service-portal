@@ -17,6 +17,8 @@ import { Rate } from 'k6/metrics'
 //   VUS          usuários virtuais  (default 10)
 //   DURATION     duração            (default 30s)
 //   FLOW_ID      workflow alvo      (default perf-test-flow)
+//   MIN_SUCCESS  fração mínima de SUCCESS (default 0.99)
+//   P95_MAX_MS   teto do p95 em ms  (default 8000)
 //
 // Execução (via Docker, na rede do compose):
 //   docker run --rm --network service-portal_portal \
@@ -39,6 +41,9 @@ if (!['v1', 'v2', 'v3'].includes(API_VERSION)) {
 }
 const VUS = parseInt(__ENV.VUS || '10', 10)
 const DURATION = __ENV.DURATION || '30s'
+// Limiares de aprovação. Stress e spike usam valores frouxos: existem para achar a saturação, não para aprovar.
+const MIN_SUCCESS = parseFloat(__ENV.MIN_SUCCESS || '0.99')
+const P95_MAX_MS = parseInt(__ENV.P95_MAX_MS || '8000', 10)
 
 export const options = {
   // setup() faz login; após execuções pesadas o orquestrador pode demorar a responder
@@ -49,7 +54,10 @@ export const options = {
   tags: { version: API_VERSION },
   thresholds: {
     http_req_failed: ['rate<0.01'], // < 1% de erros de transporte
-    http_req_duration: ['p(95)<8000'], // teto generoso; o comparativo é o foco
+    http_req_duration: [`p(95)<${P95_MAX_MS}`], // teto generoso; o comparativo é o foco
+    // Falha a execução se o fluxo falha (circuito aberto, timeout de integração etc.).
+    // Aborta cedo: depois de 10s, SUCCESS abaixo do mínimo invalida a medição.
+    workflow_success: [{ threshold: `rate>${MIN_SUCCESS}`, abortOnFail: true, delayAbortEval: '10s' }],
   },
 }
 

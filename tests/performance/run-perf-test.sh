@@ -188,9 +188,12 @@ apply_relaxed_breaker() {
     wait_idle
 }
 
+FAILED_RUNS=()
+
 # Executa k6. $5 = "measure" (gera log/json) ou "warmup" (descarta saída).
 run_k6() {
     local version="$1" vus="$2" duration="$3" label="$4" mode="$5"
+    local min_success="${6:-0.99}" p95_max="${7:-8000}"
     # label = <cenario>-<versao>-r<N>
     local out="${RAW_DIR}/${label}.txt"
     local summary="${label}.json"
@@ -203,6 +206,7 @@ run_k6() {
             -e API_VERSION="${version}" \
             -e VUS="${wvus}" \
             -e DURATION="${duration}" \
+            -e MIN_SUCCESS=0 \
             "${K6_IMAGE}" run --quiet /scripts/orchestrator-test.js >/dev/null 2>&1 || true
         return 0
     fi
@@ -210,7 +214,10 @@ run_k6() {
     log "k6 ${label} — API_VERSION=${version} VUS=${vus} DURATION=${duration}"
     rm -f "${RAW_DIR:?}/${summary:?}"
 
-    # thresholds podem falhar (exit 99) sob saturação: isso é dado, não erro do script
+    # Limiar violado (exit 99: SUCCESS abaixo do mínimo ou p95 acima do teto) invalida a medição:
+    # o runner segue para os demais cenários, marca FALHOU no relatório e sai com 1 no fim.
+    local rc=0
+    set +e
     docker run --rm --network "${NETWORK}" \
         --user "$(id -u):$(id -g)" \
         -v "${SCRIPT_DIR}:/scripts:ro" \
@@ -218,8 +225,16 @@ run_k6() {
         -e API_VERSION="${version}" \
         -e VUS="${vus}" \
         -e DURATION="${duration}" \
+        -e MIN_SUCCESS="${min_success}" \
+        -e P95_MAX_MS="${p95_max}" \
         "${K6_IMAGE}" run --summary-export "/out/${summary}" /scripts/orchestrator-test.js \
-        2>&1 | tee "${out}" || log "k6 terminou com status != 0 (thresholds?) — seguindo"
+        2>&1 | tee "${out}"
+    rc="${PIPESTATUS[0]}"
+    set -e
+    if [[ "${rc}" != "0" ]]; then
+        log "k6 ${label} terminou com código ${rc} (limiar violado ou erro de execução)"
+        FAILED_RUNS+=("${label}")
+    fi
 
     log "Resultado salvo em ${out}"
 }
@@ -346,6 +361,9 @@ if [[ "${RELAXED_BREAKER}" == true ]]; then apply_relaxed_breaker; fi
 
 run_scenario() {
     local name="$1" vus="$2" duration="$3"
+    # Stress e spike procuram a saturação: limiares frouxos (SUCCESS > 80%, p95 < 30 s).
+    local min_success=0.99 p95_max=8000
+    if [[ "${name}" == "stress" || "${name}" == "spike" ]]; then min_success=0.80; p95_max=30000; fi
     scenario_selected "${name}" || return 0
 
     log "=== Cenário: ${name} (${vus} VUs × ${duration}) — versões: ${VERSIONS[*]} × ${REPEATS} repetição(ões) ==="
@@ -369,7 +387,7 @@ run_scenario() {
             # o warm-up deixa o JIT quente, mas também requests/breaker; recomeça limpo
             if [[ "${WARMUP}" != "0" ]]; then restart_orchestrator; fi
             start_stats "${RAW_DIR}/${label}.stats"
-            run_k6 "${v}" "${vus}" "${duration}" "${label}" measure
+            run_k6 "${v}" "${vus}" "${duration}" "${label}" measure "${min_success}" "${p95_max}"
             stop_stats
         done
     done
@@ -413,7 +431,7 @@ collect_row() {
     local label="$1" version="$2"
     local files=() f
     while IFS= read -r f; do [[ -s "${f}" ]] && files+=("${f}"); done < <(rep_files "${label}" "${version}" json)
-    if (( ${#files[@]} == 0 )); then echo "| ${label} | ${version} | — | — | — | — | — | 0 |"; return; fi
+    if (( ${#files[@]} == 0 )); then echo "| ${label} | ${version} | — | — | — | — | — | 0 | — |"; return; fi
     local avgs=() p95s=() reqs=() errs=() succs=()
     for f in "${files[@]}"; do
         avgs+=("$(json_trend "${f}" http_req_duration avg)")
@@ -428,7 +446,14 @@ collect_row() {
     AVG["${label}-${version}"]="${avg}"
     P95["${label}-${version}"]="${p95}"
     [[ -n "${req}" ]] && req="$(awk -v v="${req}" 'BEGIN{printf "%.0f", v}')"
-    echo "| ${label} | ${version} | $(fmt_ms "${avg}") | $(fmt_ms "${p95}") | ${req:-n/a} | $(fmt_pct "${err}") | $(fmt_pct "${succ}") | ${#files[@]} |"
+    # ok = dentro dos limiares de aceite; saturado = terminou, mas fora deles (esperado no stress/spike);
+    # FALHOU = alguma repetição violou os limiares do cenário (k6 com código != 0)
+    local result="ok" fr
+    for fr in "${FAILED_RUNS[@]:-}"; do
+        [[ "${fr}" == "${label}-${version}-r"* ]] && result="FALHOU"
+    done
+    if [[ "${result}" == "ok" ]] && awk -v s="${succ:-0}" -v p="${p95:-0}" 'BEGIN{exit !(s < 0.99 || p > 8000)}'; then result="saturado"; fi
+    echo "| ${label} | ${version} | $(fmt_ms "${avg}") | $(fmt_ms "${p95}") | ${req:-n/a} | $(fmt_pct "${err}") | $(fmt_pct "${succ}") | ${#files[@]} | ${result} |"
 }
 
 speedup_row() {
@@ -499,8 +524,10 @@ cat <<TABLE_HEAD
 
 Valores = **mediana** das repetições (coluna Reps); cada repetição fica em \`docs/performance/raw/<cenario>-<versao>-r<N>.*\`.
 
-| Cenário | Versão | Latência avg | Latência P95 | Total reqs | Erros (HTTP) | Sucesso (flows) | Reps |
-|---|---|---|---|---|---|---|---|
+\`Resultado\`: \`ok\` cumpre Sucesso ≥ 99% e p95 ≤ 8 s; \`saturado\` terminou, mas fora desses limites (esperado no stress e no spike, que procuram a saturação); \`FALHOU\` violou os limiares do cenário (stress/spike: Sucesso > 80% e p95 < 30 s) e o runner sai com código 1.
+
+| Cenário | Versão | Latência avg | Latência P95 | Total reqs | Erros (HTTP) | Sucesso (flows) | Reps | Resultado |
+|---|---|---|---|---|---|---|---|---|
 TABLE_HEAD
 
 for s in "${REPORT_SCENARIOS[@]}"; do
@@ -600,4 +627,9 @@ ANALYSIS
 } > "${RESULTS_FILE}"
 
 log "Relatório gerado: ${RESULTS_FILE}"
+if [[ ${#FAILED_RUNS[@]} -gt 0 ]]; then
+    log "Execuções que violaram limiares: ${FAILED_RUNS[*]}"
+    exit 1
+fi
+
 log "Benchmark concluído."

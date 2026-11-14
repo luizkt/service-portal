@@ -54,6 +54,16 @@ Ainda não executado. Rode `./tests/performance/run-perf-test.sh` para gerar as 
 | v2 threads físicas | ~500 ms | As 6 do mesmo `order` disparam juntas, enquanto houver thread livre no pool |
 | v3 virtual threads | ~500 ms | As 6 disparam juntas; sem limite prático de threads |
 
+## Referência: medição v1 x v2 (PR #14, 2026-11-08, Boot 4.1.2)
+
+Medição anterior, antes do v3, com breaker relaxado e WireMock com pool folgado (100% de SUCCESS). Serve de ponto de comparação; o runner sobrescreve este arquivo com as novas medições.
+
+| Cenário | v1 avg | v2 avg | Speedup |
+|---|---|---|---|
+| baseline | 2.81s | 513.51ms | 5.5× |
+| load | 3.05s | 512.05ms | 6.0× |
+| stress | 3.04s | 510.6ms | 6.0× |
+
 ## Como reproduzir
 
 ```bash
@@ -65,4 +75,7 @@ docker compose -f docker-compose-service-portal.yml up -d
 
 # Só o spike, comparando v2 e v3, sem recriar o workflow
 ./tests/performance/run-perf-test.sh --skip-setup --scenario spike --versions v2,v3
+
+# Com o circuit breaker padrão (800 ms), sem o override
+./tests/performance/run-perf-test.sh --no-relaxed-breaker
 ```
