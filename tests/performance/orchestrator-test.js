@@ -1,5 +1,6 @@
 import http from 'k6/http'
 import { check, sleep } from 'k6'
+import { Rate } from 'k6/metrics'
 
 // =====================================================================
 // Teste de performance: comparativo v1 (sequencial) x v2 (threads físicas) x
@@ -24,6 +25,12 @@ import { check, sleep } from 'k6'
 //     grafana/k6 run /scripts/orchestrator-test.js
 // =====================================================================
 
+// O orquestrador responde HTTP 200 mesmo quando o flow termina FAILED (o status vem no
+// corpo), então http_req_failed NÃO enxerga falhas de negócio. workflow_success é true
+// somente com HTTP 200 E "status":"SUCCESS" no corpo; a latência só é comparável entre
+// versões quando workflow_success = 100%.
+const workflowSuccess = new Rate('workflow_success')
+
 const ORCH_URL = __ENV.ORCH_URL || 'http://orchestrator:8080'
 const API_VERSION = __ENV.API_VERSION || 'v1'
 const FLOW_ID = __ENV.FLOW_ID || 'perf-test-flow'
@@ -34,6 +41,8 @@ const VUS = parseInt(__ENV.VUS || '10', 10)
 const DURATION = __ENV.DURATION || '30s'
 
 export const options = {
+  // setup() faz login; após execuções pesadas o orquestrador pode demorar a responder
+  setupTimeout: '120s',
   vus: VUS,
   duration: DURATION,
   // Tag aplicada a todas as métricas/checks para facilitar a comparação.
@@ -69,6 +78,10 @@ export default function (data) {
   }
 
   const res = http.post(url, payload, params)
+
+  workflowSuccess.add(res.status === 200 && !!res.body && res.body.includes('"status":"SUCCESS"'), {
+    version: API_VERSION,
+  })
 
   check(res, {
     'status HTTP 200': (r) => r.status === 200,
