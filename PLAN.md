@@ -31,7 +31,7 @@ Branch principal: `claude/projeto-base`
 - Multi-instância de Kafka e RabbitMQ configurada via `orch-integrations` no `application.yml`; match pelo campo `id`
 - Profile Spring `docker` para rodar com `docker compose up`
 - Sem libs de UI/state externas no frontend — `fetch` nativo + `useState/useEffect`
-- Endpoints de execução versionados: `/api/v1/flows/{flowId}/versions/{version}/executions` (sequencial) e `/api/v2/flows/{flowId}/versions/{version}/executions` (paralelo via Virtual Threads)
+- Endpoints de execução versionados: `/api/v1/flows/{flowId}/versions/{version}/executions` (sequencial) e `/api/v2/flows/{flowId}/versions/{version}/executions` (paralelo via Virtual Threads). **Atualização (PLAN-orchestrator-v1-v2-v3-benchmark):** a antiga v2 virou **v3** (`/api/v3/...`, virtual threads); a nova **v2** usa **threads físicas** em pool fixo compartilhado (200) com fila limitada + `CallerRunsPolicy`. As menções históricas abaixo a "v2 = Virtual Threads" referem-se à v3 atual
 - MongoDB: database `generic-orchestrator`, collection `workflows`, índice composto em `id` + `versao`
 
 ---
@@ -108,8 +108,8 @@ Manager (Kotlin, :8082) — dono da collection `workflows` (após migração fas
 | **Filtragem de menu por grupo (sidebar)** | BFF | ✅ Feito | BFF filtra `GET /bff/menu` pelo grupo do usuário autenticado; `MenuItemDto` ganha `requiredGroups` (`@JsonIgnore`); `flow-manager` exige ADMIN ou WORKFLOWS; RULES e sem-grupo recebem lista vazia; 6 novos testes, 49 total, BUILD SUCCESSFUL |
 | **Versionamento semântico automático no update de workflow** | Manager | ✅ Feito | `PUT /manager/flows/{flowId}/versions/{v}` mantém versão antiga ativa e cria nova via SemVer 2.0.0 (MAJOR=contract, MINOR=integrations, PATCH=description); `GET /manager/flows` lista somente ativos; 71 testes, cobertura ≥ 95% |
 | **Endpoint de histórico de versões** | Manager | ✅ Feito | `GET /manager/flows/{flowId}/versions?status=active\|inactive` lista todas as versões (ou filtra); 76 testes, cobertura ≥ 95% |
-| **Execução multithread com Java Virtual Threads (v2 endpoint)** | Orquestrador | ✅ Feito | Endpoint v1 (`/api/v1/flows/...`) preserva comportamento sequencial; endpoint v2 (`/api/v2/flows/...`) paralela integrações com mesmo `order` via `Executors.newVirtualThreadPerTaskExecutor()`; `FlowExecutionContext.integrations` migrado para `ConcurrentHashMap`; `OrchestrationV2Service` + 6 testes; 78 testes total, BUILD SUCCESSFUL |
-| **Propagação v2 para BFF e Frontend (comparativo de performance)** | BFF + Frontend | ✅ Feito | BFF: `OrchestratorClient.executeV2()` + endpoint `POST /bff/flows/.../executions/v2`; Frontend: botões "v1 Sequencial" e "v2 Paralelo" com resultados lado a lado; 51 testes BFF + 70 testes frontend, todos passando |
+| **Execução multithread com Java Virtual Threads (v2 endpoint; hoje v3 — a v2 passou a threads físicas)** | Orquestrador | ✅ Feito | Endpoint v1 (`/api/v1/flows/...`) preserva comportamento sequencial; endpoint v2 (`/api/v2/flows/...`) paralela integrações com mesmo `order` via `Executors.newVirtualThreadPerTaskExecutor()`; `FlowExecutionContext.integrations` migrado para `ConcurrentHashMap`; `OrchestrationV2Service` + 6 testes; 78 testes total, BUILD SUCCESSFUL |
+| **Propagação v2 para BFF e Frontend (comparativo de performance; evoluído para v1/v2/v3)** | BFF + Frontend | ✅ Feito | BFF: `OrchestratorClient.executeV2()` + endpoint `POST /bff/flows/.../executions/v2`; Frontend: botões "v1 Sequencial" e "v2 Paralelo" com resultados lado a lado; 51 testes BFF + 70 testes frontend, todos passando |
 | **Modularização de workflows: collections integrations, contracts, validations** | Manager | ✅ Feito | 3 novas collections MongoDB; CRUD APIs `/manager/integrations`, `/manager/contracts`, `/manager/validations`; `ResourceRef` + campos `contract/integrationRefs/validationRefs` no `FlowDocument`; `SequentialVersioningService` (1→2→3); `init-mongo.js` atualizado; 150 testes, 0 falhas |
 | **Execução da seção `validations` no pipeline do orquestrador** | Orquestrador | ✅ Feito | Fase validações após integrações em v1 e v2; reutiliza `IntegrationDefinition`; `FlowExecutionContext.validations` separado de `integrations`; `executePhase()` + `runStep(BiConsumer)` no v2; resposta inclui `result` (integrações) e `validations` (validações) como mapas separados; 87 testes, 0 falhas, gate JaCoCo ≥ 95% |
 | **Invalidação de cache cross-service (S3)** | Orquestrador + Manager | ✅ Feito | `CacheAdminController` (`DELETE /api/admin/cache/workflows[/{flowId}/versions/{version}]`) no orquestrador; Manager invalida via `RestClient` (`OrchestratorCacheClient` + `OrchestratorAuthService`) após `update()`/`deactivate()`; falha tolerante (warning, não propaga); validado e2e (chave Redis removida) + tolerância a falha; testes nos dois lados, gates JaCoCo ≥ 95% |
@@ -205,6 +205,8 @@ Manager (Kotlin, :8082) — dono da collection `workflows` (após migração fas
 (nenhum item pendente neste componente)
 
 ### ✅ Consumidores do endpoint v2 — implementados
+
+> Nota: a v2 histórica (virtual threads) é hoje a **v3**; o BFF ganha `executeV3`/`.../executions/v3` e o frontend o botão "v3 Virtual Threads" (botão v2 = "v2 Threads Físicas"). Ver PLAN-orchestrator-v1-v2-v3-benchmark.md.
 
 **BFF (`service-portal-bff`)**
 - `OrchestratorClient`: path corrigido para `/api/v1/flows/...`; método `executeV2()` adicionado apontando para `/api/v2/flows/...`
@@ -371,7 +373,7 @@ Para evitar trafegar dezenas/centenas de KB por fluxo em listagens (cliente norm
 Concluída. Paridade funcional confirmada e speedup mensurado entre v1 (sequencial) e v2 (paralelo). Ver PLAN-integrated-tests-v1-v2.md e o detalhe abaixo.
 
 ### ✅ Pendência: Teste de performance Orquestrador (v1 vs v2)
-Implementado (S6). Ver PLAN-performance-test-k6.md e docs/performance/RESULTS-v1-vs-v2.md.
+Implementado (S6). Ver PLAN-performance-test-k6.md e docs/performance/RESULTS-v1-v2-v3.md.
 
 ### ✅ Pendência: Melhoria de logs: agrupamento por execução de flow (MDC/Tracing) — CONCLUÍDA (S8)
 
@@ -404,16 +406,16 @@ O `teste-integrado-service-portal-v3.sh` agora valida as duas rotas de execuçã
 ### ✅ Pendência: Teste de performance Orquestrador (v1 vs v2) — CONCLUÍDA (S6)
 
 > 📄 **Plano detalhado:** [docs/plans/PLAN-performance-test-k6.md](docs/plans/PLAN-performance-test-k6.md)
-> 📊 **Resultados:** [docs/performance/RESULTS-v1-vs-v2.md](docs/performance/RESULTS-v1-vs-v2.md)
+> 📊 **Resultados:** [docs/performance/RESULTS-v1-v2-v3.md](docs/performance/RESULTS-v1-v2-v3.md) (renomeado de RESULTS-v1-vs-v2.md)
 
 **O que foi feito:**
 - **`perf-test-flow`** adicionado ao `service-portal-manager/mongodb-manager/init-mongo.js` — 6 integrações HTTP no mesmo `order: 1` apontando para o stub lento `/slow/P1..P6` do WireMock (500ms cada); disponível automaticamente no `docker compose up`
 - **`tests/performance/orchestrator-test.js`** (k6) — `setup()` autentica uma única vez contra o orquestrador; parâmetros via env vars (`API_VERSION`, `VUS`, `DURATION`, `FLOW_ID`); 3 checks por iteração (HTTP 200, status SUCCESS, não-5xx)
 - **`tests/performance/setup-perf-flow.sh`** — cria o workflow no Manager via API (idempotente: 409 = ok) + flush do Redis para evitar cache stale
-- **`tests/performance/run-perf-test.sh`** — runner completo: setup → baseline (1VU/30s) → load (20VUs/2min) → stress (50VUs/3min) para v1 e v2; extrai métricas dos logs k6; gera `docs/performance/RESULTS-v1-vs-v2.md` automaticamente
+- **`tests/performance/run-perf-test.sh`** — runner completo: setup → baseline (1VU/30s) → load (20VUs/2min) → stress (50VUs/3min) para v1 e v2; extrai métricas dos logs k6; gera `docs/performance/RESULTS-v1-vs-v2.md` automaticamente (hoje: v1→v2→v3, cenário spike, `--summary-export` JSON, `docker stats`; relatório em `docs/performance/RESULTS-v1-v2-v3.md`)
 - Todos os scripts via Docker (`grafana/k6`) na rede `service-portal_portal`; nenhuma instalação local necessária
 
-**Expectativa:** speedup ~6× em baseline (v1 ~3000ms vs v2 ~500ms para 6 steps × 500ms); ponto de saturação identificado no cenário stress.
+**Expectativa:** speedup ~6× em baseline (v1 ~3000ms vs v2/v3 ~500ms para 6 steps × 500ms); ponto de saturação identificado no cenário stress.
 
 **Como executar:**
 ```bash
@@ -1063,7 +1065,7 @@ val expiresIn: Long
 - **3 serviços** receberam `micrometer-tracing-bridge-otel` + `opentelemetry-exporter-otlp` (versões gerenciadas pelo Spring Boot BOM); `management.tracing.sampling.probability: 1.0` e `management.otlp.tracing.endpoint` em `application.yml`; override para `http://jaeger:4318/v1/traces` em `application-docker.yml`
 - **`WebClient.Builder` injetado** em `WebClientConfig.java` (Orchestrator) e `WebClientConfig.java` (BFF) — Spring Boot aplica `ObservationWebClientCustomizer` automaticamente → header `traceparent` W3C adicionado em todas as saídas HTTP (integrações + chamadas ao Manager/Orchestrator)
 - **`RestClient.Builder` injetado** em `OrchestratorClientConfig.kt` (Manager) → `ObservationRestClientCustomizer` propaga `traceparent` nas chamadas de invalidação de cache Manager→Orchestrator
-- **`OrchestrationV2Service`** — `io.opentelemetry.context.Context.current()` capturado antes do `vte.submit()`; cada virtual thread abre `Scope` via `otelCtx.makeCurrent()` antes de executar + fecha no finally — trace OTel é visível no Jaeger mesmo para as execuções paralelas do v2
+- **`OrchestrationV2Service` (hoje base comum + v3 virtual; a nova v2 usa pool físico)** — `io.opentelemetry.context.Context.current()` capturado antes do `vte.submit()`; cada virtual thread abre `Scope` via `otelCtx.makeCurrent()` antes de executar + fecha no finally — trace OTel é visível no Jaeger mesmo para as execuções paralelas do v2
 - **`OrchestratorClientConfigTest.kt`** atualizado para nova assinatura `orchestratorRestClient(RestClient.Builder, String)`
 - **Builds**: todos os 3 serviços `BUILD SUCCESSFUL` (Orchestrator, BFF, Manager)
 
@@ -1125,8 +1127,8 @@ val expiresIn: Long
 - **`init-mongo.js`** — `perf-test-flow` adicionado: 6 HTTP no mesmo `order: 1` → stub WireMock `/slow/P1..P6` (500ms fixo)
 - **`tests/performance/orchestrator-test.js`** — script k6 parametrizável (`API_VERSION`, `VUS`, `DURATION`)
 - **`tests/performance/setup-perf-flow.sh`** — cria o workflow no Manager via API + flush Redis
-- **`tests/performance/run-perf-test.sh`** — runner completo: 3 cenários × 2 versões → gera `docs/performance/RESULTS-v1-vs-v2.md`
-- **`docs/performance/RESULTS-v1-vs-v2.md`** — template com instruções; sobrescrito pelo runner com métricas reais
+- **`tests/performance/run-perf-test.sh`** — runner completo: 3 cenários × 2 versões → gera `docs/performance/RESULTS-v1-vs-v2.md` (atual: 4 cenários × 3 versões → `RESULTS-v1-v2-v3.md`)
+- **`docs/performance/RESULTS-v1-v2-v3.md`** (antes `RESULTS-v1-vs-v2.md`) — template com instruções; sobrescrito pelo runner com métricas reais
 
 **Execução:** `./tests/performance/run-perf-test.sh` (requer stack up + Docker)
 
