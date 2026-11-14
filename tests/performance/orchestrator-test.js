@@ -2,14 +2,16 @@ import http from 'k6/http'
 import { check, sleep } from 'k6'
 
 // =====================================================================
-// Teste de performance: comparativo v1 (sequencial) x v2 (paralelo) do
-// generic-orchestrator. O workflow perf-test-flow tem 6 integrações HTTP
+// Teste de performance: comparativo v1 (sequencial) x v2 (threads físicas) x
+// v3 (virtual threads) do generic-orchestrator. O workflow perf-test-flow tem 6 integrações HTTP
 // no MESMO order (1) apontando para o stub lento do WireMock (~500ms cada):
 //   - v1: execução sequencial  → ~3000ms por requisição
-//   - v2: Java Virtual Threads → ~500ms  por requisição
+//   - v2: threads físicas (pool fixo compartilhado) → ~500ms por requisição,
+//         degrada ao saturar o pool (6 tarefas/req; pool default 200)
+//   - v3: Java Virtual Threads (1 por tarefa) → ~500ms por requisição
 //
 // Parametrização via variáveis de ambiente:
-//   API_VERSION  v1 | v2            (default v1)
+//   API_VERSION  v1 | v2 | v3       (default v1)
 //   ORCH_URL     base do orquestrador (default http://orchestrator:8080)
 //   VUS          usuários virtuais  (default 10)
 //   DURATION     duração            (default 30s)
@@ -18,19 +20,24 @@ import { check, sleep } from 'k6'
 // Execução (via Docker, na rede do compose):
 //   docker run --rm --network service-portal_portal \
 //     -v "$PWD/tests/performance:/scripts:ro" \
-//     -e API_VERSION=v2 -e VUS=10 -e DURATION=30s \
+//     -e API_VERSION=v3 -e VUS=10 -e DURATION=30s \
 //     grafana/k6 run /scripts/orchestrator-test.js
 // =====================================================================
 
 const ORCH_URL = __ENV.ORCH_URL || 'http://orchestrator:8080'
 const API_VERSION = __ENV.API_VERSION || 'v1'
 const FLOW_ID = __ENV.FLOW_ID || 'perf-test-flow'
+if (!['v1', 'v2', 'v3'].includes(API_VERSION)) {
+  throw new Error(`API_VERSION inválida: ${API_VERSION} (use v1, v2 ou v3)`)
+}
 const VUS = parseInt(__ENV.VUS || '10', 10)
 const DURATION = __ENV.DURATION || '30s'
 
 export const options = {
   vus: VUS,
   duration: DURATION,
+  // Tag aplicada a todas as métricas/checks para facilitar a comparação.
+  tags: { version: API_VERSION },
   thresholds: {
     http_req_failed: ['rate<0.01'], // < 1% de erros de transporte
     http_req_duration: ['p(95)<8000'], // teto generoso; o comparativo é o foco
