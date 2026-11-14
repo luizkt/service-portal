@@ -477,12 +477,12 @@ test_crud_workflows() {
 }
 
 # ─── 4. Execução via Orchestrator ────────────────────────────────────────────
-# Globais preenchidos por test_execution para o relatório comparativo v1 x v2.
+# Globais preenchidos por test_execution para o relatório comparativo v1 x v2 x v3.
 PERF_ROWS=()
 EXEC_BODY=""
 EXEC_MS=0
 
-# Executa um workflow no orquestrador na versão indicada (v1|v2) medindo a latência.
+# Executa um workflow no orquestrador na versão indicada (v1|v2|v3) medindo a latência.
 # Resultado em EXEC_BODY (corpo JSON) e EXEC_MS (duração em ms).
 execute_and_measure() {
     local version=$1 flow_id=$2 payload=$3
@@ -497,7 +497,7 @@ execute_and_measure() {
     EXEC_MS=$((end - start))
 }
 
-# Compara paridade semântica de {status,result,validations} entre v1 e v2.
+# Compara paridade semântica de {status,result,validations} entre duas respostas (v1, v2, v3).
 # Usa jq se disponível; senão python3 (fallback). Retorna:
 #   0 = idêntico, 1 = divergente, 2 = sem ferramenta de comparação disponível.
 compare_parity() {
@@ -525,54 +525,69 @@ PY
 }
 
 test_execution() {
-    section "4. EXECUÇÃO DE WORKFLOWS — comparativo v1 x v2 (Orchestrator direto)"
+    section "4. EXECUÇÃO DE WORKFLOWS — comparativo v1 x v2 x v3 (Orchestrator direto)"
 
     if [ -z "$ORCH_TOKEN" ]; then
         warning "Pulando execução — sem token Orchestrator"
         return 1
     fi
 
-    # 4.1 — create-order-v1 (smoke funcional nas duas rotas). Resposta contém
+    # 4.1 — create-order-v1 (smoke funcional nas três rotas). Resposta contém
     # campos não-determinísticos (orderId aleatório), então validamos paridade
     # apenas de status, não do result completo.
-    test_case "4.1 create-order-v1 — v1 e v2 retornam SUCCESS"
+    test_case "4.1 create-order-v1 — v1, v2 e v3 retornam SUCCESS"
     execute_and_measure v1 "create-order-v1" '{"clientId":"ABC123","amount":150.00}'
     local co_b1=$EXEC_BODY co_t1=$EXEC_MS
     execute_and_measure v2 "create-order-v1" '{"clientId":"ABC123","amount":150.00}'
     local co_b2=$EXEC_BODY co_t2=$EXEC_MS
-    if echo "$co_b1" | grep -q '"status":"SUCCESS"' && echo "$co_b2" | grep -q '"status":"SUCCESS"'; then
-        success "create-order-v1: v1=${co_t1}ms, v2=${co_t2}ms (ambos SUCCESS)"
+    execute_and_measure v3 "create-order-v1" '{"clientId":"ABC123","amount":150.00}'
+    local co_b3=$EXEC_BODY co_t3=$EXEC_MS
+    if echo "$co_b1" | grep -q '"status":"SUCCESS"' && echo "$co_b2" | grep -q '"status":"SUCCESS"' \
+        && echo "$co_b3" | grep -q '"status":"SUCCESS"'; then
+        success "create-order-v1: v1=${co_t1}ms, v2=${co_t2}ms, v3=${co_t3}ms (todos SUCCESS)"
     else
-        warning "create-order-v1: v1=$(echo "$co_b1" | head -c 80) | v2=$(echo "$co_b2" | head -c 80)"
+        warning "create-order-v1: v1=$(echo "$co_b1" | head -c 80) | v2=$(echo "$co_b2" | head -c 80) | v3=$(echo "$co_b3" | head -c 80)"
     fi
-    PERF_ROWS+=("| create-order-v1 | ${co_t1}ms | ${co_t2}ms | $(awk "BEGIN{if($co_t2>0)printf \"%.2fx\",$co_t1/$co_t2; else printf \"n/a\"}") | status |")
+    PERF_ROWS+=("| create-order-v1 | ${co_t1}ms | ${co_t2}ms | ${co_t3}ms | $(awk "BEGIN{if($co_t2>0)printf \"%.2fx\",$co_t1/$co_t2; else printf \"n/a\"}") | $(awk "BEGIN{if($co_t3>0)printf \"%.2fx\",$co_t1/$co_t3; else printf \"n/a\"}") | status |")
 
     # 4.2 — parallel-demo-v1 (3 integrações no mesmo order, stub lento 500ms).
     # Resposta determinística → paridade total de result; v2 deve ser bem mais rápido.
-    test_case "4.2 parallel-demo-v1 — paridade total v1/v2 + speedup das Virtual Threads"
+    test_case "4.2 parallel-demo-v1 — paridade total v1/v2/v3 + speedup (threads físicas e virtuais)"
     execute_and_measure v1 "parallel-demo-v1" '{"refId":"ABC123"}'
     local pd_b1=$EXEC_BODY pd_t1=$EXEC_MS
     execute_and_measure v2 "parallel-demo-v1" '{"refId":"ABC123"}'
     local pd_b2=$EXEC_BODY pd_t2=$EXEC_MS
+    execute_and_measure v3 "parallel-demo-v1" '{"refId":"ABC123"}'
+    local pd_b3=$EXEC_BODY pd_t3=$EXEC_MS
 
-    local parity_mark="?" parity_rc=0
+    local parity_mark="?" parity_rc=0 parity_rc3=0
     compare_parity "$pd_b1" "$pd_b2" || parity_rc=$?
+    compare_parity "$pd_b1" "$pd_b3" || parity_rc3=$?
+    # Pior resultado entre v1×v2 e v1×v3 (1 = divergente > 2 = sem ferramenta > 0)
+    if [ "$parity_rc" -eq 1 ] || [ "$parity_rc3" -eq 1 ]; then parity_rc=1
+    elif [ "$parity_rc" -eq 2 ] || [ "$parity_rc3" -eq 2 ]; then parity_rc=2; fi
     case $parity_rc in
-        0) success "Paridade v1/v2 confirmada (status+result+validations idênticos)"; parity_mark="✅" ;;
-        1) error "Divergência v1/v2 detectada em parallel-demo-v1!"; parity_mark="❌"
-           debug "v1: $(echo "$pd_b1" | head -c 200)"; debug "v2: $(echo "$pd_b2" | head -c 200)" ;;
+        0) success "Paridade v1/v2/v3 confirmada (status+result+validations idênticos)"; parity_mark="✅" ;;
+        1) error "Divergência v1/v2/v3 detectada em parallel-demo-v1!"; parity_mark="❌"
+           debug "v1: $(echo "$pd_b1" | head -c 200)"; debug "v2: $(echo "$pd_b2" | head -c 200)"; debug "v3: $(echo "$pd_b3" | head -c 200)" ;;
         2) warning "jq/python3 ausentes — paridade detalhada pulada (validado apenas status)"
            echo "$pd_b1" | grep -q '"status":"SUCCESS"' && echo "$pd_b2" | grep -q '"status":"SUCCESS"' \
+               && echo "$pd_b3" | grep -q '"status":"SUCCESS"' \
                && parity_mark="~status~" || parity_mark="⚠" ;;
     esac
 
-    # Asserção de speedup: v2 deve ser significativamente mais rápido (< 70% do v1).
+    # Asserção de speedup: v2 e v3 devem ser significativamente mais rápidos (< 70% do v1).
     if [ "$pd_t1" -gt 0 ] && [ "$pd_t2" -gt 0 ] && [ $((pd_t2 * 100)) -lt $((pd_t1 * 70)) ]; then
-        success "Speedup v2 confirmado: v1=${pd_t1}ms vs v2=${pd_t2}ms"
+        success "Speedup v2 (threads físicas) confirmado: v1=${pd_t1}ms vs v2=${pd_t2}ms"
     else
         warning "Speedup v2 não evidente: v1=${pd_t1}ms vs v2=${pd_t2}ms (esperado v2 << v1)"
     fi
-    PERF_ROWS+=("| parallel-demo-v1 | ${pd_t1}ms | ${pd_t2}ms | $(awk "BEGIN{if($pd_t2>0)printf \"%.2fx\",$pd_t1/$pd_t2; else printf \"n/a\"}") | $parity_mark |")
+    if [ "$pd_t1" -gt 0 ] && [ "$pd_t3" -gt 0 ] && [ $((pd_t3 * 100)) -lt $((pd_t1 * 70)) ]; then
+        success "Speedup v3 (virtual threads) confirmado: v1=${pd_t1}ms vs v3=${pd_t3}ms"
+    else
+        warning "Speedup v3 não evidente: v1=${pd_t1}ms vs v3=${pd_t3}ms (esperado v3 << v1)"
+    fi
+    PERF_ROWS+=("| parallel-demo-v1 | ${pd_t1}ms | ${pd_t2}ms | ${pd_t3}ms | $(awk "BEGIN{if($pd_t2>0)printf \"%.2fx\",$pd_t1/$pd_t2; else printf \"n/a\"}") | $(awk "BEGIN{if($pd_t3>0)printf \"%.2fx\",$pd_t1/$pd_t3; else printf \"n/a\"}") | $parity_mark |")
 
     # 4.3 — smoke da rota v2 via BFF (proxy) para confirmar o caminho ponta a ponta.
     if [ -n "$AUTH_TOKEN" ]; then
@@ -663,16 +678,17 @@ Data: $(date)
 - Orchestrator Token: $([ -n "$ORCH_TOKEN" ]    && echo "✓ sim" || echo "✗ não")
 - Authentik Token:    $([ -n "$AUTH_TOKEN" ]     && echo "✓ sim" || echo "✗ não (testes BFF pulados)")
 
-## Comparativo de execução v1 (sequencial) x v2 (paralelo)
+## Comparativo de execução v1 (sequencial) x v2 (threads físicas) x v3 (virtual threads)
 
-| Workflow | Latência v1 | Latência v2 | Speedup | Paridade |
-|---|---|---|---|---|
+| Workflow | Latência v1 | Latência v2 | Latência v3 | Speedup v2 | Speedup v3 | Paridade |
+|---|---|---|---|---|---|---|
 $(printf '%s\n' "${PERF_ROWS[@]}")
 
 > Paridade: ✅ = {status,result,validations} idênticos (via jq ou python3); \`status\` = apenas status
 > comparado (resposta com campos não-determinísticos); ⚠/~status~ = jq e python3 ausentes, detalhe pulado.
-> O speedup do \`parallel-demo-v1\` evidencia o paralelismo das Virtual Threads (3 integrações @ 500ms
-> no mesmo \`order\`): v1 ≈ soma sequencial; v2 ≈ a mais lenta das paralelas.
+> O speedup do \`parallel-demo-v1\` evidencia o paralelismo (3 integrações @ 500ms no mesmo \`order\`):
+> v1 ≈ soma sequencial; v2 (threads físicas) e v3 (virtual threads) ≈ a mais lenta das paralelas.
+> Speedup = latência v1 / latência da versão. A rota v3 exige o orquestrador com \`/api/v3\`.
 
 ## Log detalhado
 $LOG_FILE
