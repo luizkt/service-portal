@@ -17,6 +17,7 @@ Este documento serve como índice para toda a documentação técnica do Service
 - Prometheus Config: Regras de coleta.
 - Grafana Provisioning: Configuração de data sources.
 - Dashboards JSON: Definições visuais dos painéis.
+- [Exclusão de `/actuator` das métricas HTTP](monitoring/PLAN-exclude-health-metrics.md)
 
 ## � Diagnósticos e Incidentes (`docs/diagnostics/`)
 - Padrão de Nomenclatura
