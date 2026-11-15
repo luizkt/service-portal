@@ -1,0 +1,148 @@
+
+         /\      Grafana   /‾‾/  
+    /\  /  \     |\  __   /  /   
+   /  \/    \    | |/ /  /   ‾‾\ 
+  /          \   |   (  |  (‾)  |
+ / __________ \  |_|\_\  \_____/ 
+
+
+     execution: local
+        script: /scripts/orchestrator-test.js
+        output: -
+
+     scenarios: (100.00%) 1 scenario, 1 max VUs, 1m0s max duration (incl. graceful stop):
+              * default: 1 looping VUs for 30s (gracefulStop: 30s)
+
+
+running (0m01.0s), 1/1 VUs, 1 complete and 0 interrupted iterations
+default   [   3% ] 1 VUs  00.9s/30s
+
+running (0m02.0s), 1/1 VUs, 3 complete and 0 interrupted iterations
+default   [   6% ] 1 VUs  01.9s/30s
+
+running (0m03.0s), 1/1 VUs, 5 complete and 0 interrupted iterations
+default   [  10% ] 1 VUs  02.9s/30s
+
+running (0m04.0s), 1/1 VUs, 6 complete and 0 interrupted iterations
+default   [  13% ] 1 VUs  03.9s/30s
+
+running (0m05.0s), 1/1 VUs, 8 complete and 0 interrupted iterations
+default   [  16% ] 1 VUs  04.9s/30s
+
+running (0m06.0s), 1/1 VUs, 10 complete and 0 interrupted iterations
+default   [  20% ] 1 VUs  05.9s/30s
+
+running (0m07.0s), 1/1 VUs, 12 complete and 0 interrupted iterations
+default   [  23% ] 1 VUs  06.9s/30s
+
+running (0m08.0s), 1/1 VUs, 14 complete and 0 interrupted iterations
+default   [  26% ] 1 VUs  07.9s/30s
+
+running (0m09.0s), 1/1 VUs, 16 complete and 0 interrupted iterations
+default   [  30% ] 1 VUs  08.9s/30s
+
+running (0m10.0s), 1/1 VUs, 18 complete and 0 interrupted iterations
+default   [  33% ] 1 VUs  09.9s/30s
+
+running (0m11.0s), 1/1 VUs, 20 complete and 0 interrupted iterations
+default   [  36% ] 1 VUs  10.9s/30s
+
+running (0m12.0s), 1/1 VUs, 21 complete and 0 interrupted iterations
+default   [  40% ] 1 VUs  11.9s/30s
+
+running (0m13.0s), 1/1 VUs, 23 complete and 0 interrupted iterations
+default   [  43% ] 1 VUs  12.9s/30s
+
+running (0m14.0s), 1/1 VUs, 25 complete and 0 interrupted iterations
+default   [  46% ] 1 VUs  13.9s/30s
+
+running (0m15.0s), 1/1 VUs, 27 complete and 0 interrupted iterations
+default   [  50% ] 1 VUs  14.9s/30s
+
+running (0m16.0s), 1/1 VUs, 29 complete and 0 interrupted iterations
+default   [  53% ] 1 VUs  15.9s/30s
+
+running (0m17.0s), 1/1 VUs, 31 complete and 0 interrupted iterations
+default   [  56% ] 1 VUs  16.9s/30s
+
+running (0m18.0s), 1/1 VUs, 33 complete and 0 interrupted iterations
+default   [  60% ] 1 VUs  17.9s/30s
+
+running (0m19.0s), 1/1 VUs, 35 complete and 0 interrupted iterations
+default   [  63% ] 1 VUs  18.9s/30s
+
+running (0m20.0s), 1/1 VUs, 36 complete and 0 interrupted iterations
+default   [  66% ] 1 VUs  19.9s/30s
+
+running (0m21.0s), 1/1 VUs, 38 complete and 0 interrupted iterations
+default   [  70% ] 1 VUs  20.9s/30s
+
+running (0m22.0s), 1/1 VUs, 40 complete and 0 interrupted iterations
+default   [  73% ] 1 VUs  21.9s/30s
+
+running (0m23.0s), 1/1 VUs, 42 complete and 0 interrupted iterations
+default   [  76% ] 1 VUs  22.9s/30s
+
+running (0m24.0s), 1/1 VUs, 44 complete and 0 interrupted iterations
+default   [  80% ] 1 VUs  23.9s/30s
+
+running (0m25.0s), 1/1 VUs, 46 complete and 0 interrupted iterations
+default   [  83% ] 1 VUs  24.9s/30s
+
+running (0m26.0s), 1/1 VUs, 48 complete and 0 interrupted iterations
+default   [  86% ] 1 VUs  25.9s/30s
+
+running (0m27.0s), 1/1 VUs, 50 complete and 0 interrupted iterations
+default   [  90% ] 1 VUs  26.9s/30s
+
+running (0m28.0s), 1/1 VUs, 51 complete and 0 interrupted iterations
+default   [  93% ] 1 VUs  27.9s/30s
+
+running (0m29.0s), 1/1 VUs, 53 complete and 0 interrupted iterations
+default   [  96% ] 1 VUs  28.9s/30s
+
+running (0m30.0s), 1/1 VUs, 55 complete and 0 interrupted iterations
+default   [ 100% ] 1 VUs  29.9s/30s
+
+
+  █ THRESHOLDS 
+
+    http_req_duration
+    ✓ 'p(95)<8000' p(95)=65.72ms
+
+    http_req_failed
+    ✓ 'rate<0.01' rate=0.00%
+
+
+  █ TOTAL RESULTS 
+
+    checks_total.......: 168    5.570269/s
+    checks_succeeded...: 66.66% 112 out of 168
+    checks_failed......: 33.33% 56 out of 168
+
+    ✓ status HTTP 200
+    ✗ workflow SUCCESS
+      ↳  0% — ✓ 0 / ✗ 56
+    ✓ não é 5xx
+
+    HTTP
+    http_req_duration..............: avg=36.84ms  min=13.97ms  med=31.17ms  max=173.71ms p(90)=53.42ms  p(95)=65.72ms 
+      { expected_response:true }...: avg=36.84ms  min=13.97ms  med=31.17ms  max=173.71ms p(90)=53.42ms  p(95)=65.72ms 
+    http_req_failed................: 0.00% 0 out of 57
+    http_reqs......................: 57    1.889913/s
+
+    EXECUTION
+    iteration_duration.............: avg=536.73ms min=514.74ms med=531.75ms max=674.72ms p(90)=553.37ms p(95)=558.11ms
+    iterations.....................: 56    1.856756/s
+    vus............................: 1     min=1       max=1
+    vus_max........................: 1     min=1       max=1
+
+    NETWORK
+    data_received..................: 40 kB 1.3 kB/s
+    data_sent......................: 25 kB 812 B/s
+
+
+
+
+running (0m30.2s), 0/1 VUs, 56 complete and 0 interrupted iterations
+default ✓ [ 100% ] 1 VUs  30s
