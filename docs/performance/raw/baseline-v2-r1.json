@@ -1,0 +1,158 @@
+{
+    "metrics": {
+        "data_sent": {
+            "rate": 422.4829715646193,
+            "count": 12766
+        },
+        "vus": {
+            "value": 1,
+            "min": 1,
+            "max": 1
+        },
+        "http_req_duration{expected_response:true}": {
+            "p(90)": 554.5894482,
+            "p(95)": 571.1634993,
+            "avg": 522.6071627666668,
+            "min": 139.204508,
+            "med": 527.9122749999999,
+            "max": 639.879065
+        },
+        "http_req_waiting": {
+            "avg": 521.0487286,
+            "min": 133.509943,
+            "med": 526.2835945,
+            "max": 638.802841,
+            "p(90)": 551.6313644,
+            "p(95)": 567.8737710999999
+        },
+        "http_req_receiving": {
+            "p(95)": 3.384760499999997,
+            "avg": 1.5020733666666664,
+            "min": 0.5092,
+            "med": 1.0174625000000002,
+            "max": 5.569156,
+            "p(90)": 2.7333061
+        },
+        "workflow_success": {
+            "passes": 29,
+            "fails": 0,
+            "thresholds": {
+                "rate>0.99": false
+            },
+            "value": 1
+        },
+        "http_reqs": {
+            "count": 30,
+            "rate": 0.9928316737379428
+        },
+        "http_req_connecting": {
+            "avg": 0.0134002,
+            "min": 0,
+            "med": 0,
+            "max": 0.232144,
+            "p(90)": 0,
+            "p(95)": 0.09342409999999952
+        },
+        "iterations": {
+            "count": 29,
+            "rate": 0.9597372846133447
+        },
+        "http_req_failed": {
+            "passes": 0,
+            "fails": 30,
+            "thresholds": {
+                "rate<0.01": false
+            },
+            "value": 0
+        },
+        "checks": {
+            "passes": 87,
+            "fails": 0,
+            "value": 1
+        },
+        "http_req_duration": {
+            "med": 527.9122749999999,
+            "max": 639.879065,
+            "p(90)": 554.5894482,
+            "p(95)": 571.1634993,
+            "avg": 522.6071627666668,
+            "min": 139.204508,
+            "thresholds": {
+                "p(95)<8000": false
+            }
+        },
+        "http_req_blocked": {
+            "med": 0.0131245,
+            "max": 0.929535,
+            "p(90)": 0.030096300000000145,
+            "p(95)": 0.1930697499999996,
+            "avg": 0.05354836666666667,
+            "min": 0.004193
+        },
+        "data_received": {
+            "count": 28188,
+            "rate": 932.8646406441711
+        },
+        "iteration_duration": {
+            "avg": 1037.0429683793104,
+            "min": 1018.126866,
+            "med": 1030.059958,
+            "max": 1141.178925,
+            "p(90)": 1056.286656,
+            "p(95)": 1073.8784848
+        },
+        "vus_max": {
+            "min": 1,
+            "max": 1,
+            "value": 1
+        },
+        "http_req_sending": {
+            "avg": 0.0563608,
+            "min": 0.016917,
+            "med": 0.063239,
+            "max": 0.125409,
+            "p(90)": 0.0845453,
+            "p(95)": 0.09599334999999995
+        },
+        "http_req_tls_handshaking": {
+            "avg": 0,
+            "min": 0,
+            "med": 0,
+            "max": 0,
+            "p(90)": 0,
+            "p(95)": 0
+        }
+    },
+    "setup_data": {
+        "token": "eyJhbGciOiJIUzUxMiJ9.eyJzdWIiOiJhZG1pbiIsImlzcyI6ImdlbmVyaWMtb3JjaGVzdHJhdG9yIiwiaWF0IjoxNzk0NzA0MjEzLCJleHAiOjE3OTQ3MDc4MTN9.xpcDPrQBfltaofvSjd1ZP-EXWaNSpV3wN_HFPhp68XO8YxuGN8U5BIRbcdSrlTC_MDdK8gyy39apLvEMx-DYPg"
+    },
+    "root_group": {
+        "checks": {
+            "status HTTP 200": {
+                "path": "::status HTTP 200",
+                "id": "c5aa1eaf5f4fd3e429a3ccd252709412",
+                "passes": 29,
+                "fails": 0,
+                "name": "status HTTP 200"
+            },
+            "workflow SUCCESS": {
+                "path": "::workflow SUCCESS",
+                "id": "33d3cf40fce640e6b8e0bb314103c4b1",
+                "passes": 29,
+                "fails": 0,
+                "name": "workflow SUCCESS"
+            },
+            "não é 5xx": {
+                "name": "não é 5xx",
+                "path": "::não é 5xx",
+                "id": "281b62690da7f9056546c7c0128b7638",
+                "passes": 29,
+                "fails": 0
+            }
+        },
+        "name": "",
+        "path": "",
+        "id": "d41d8cd98f00b204e9800998ecf8427e",
+        "groups": {}
+    }
+}

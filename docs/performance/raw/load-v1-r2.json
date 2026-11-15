@@ -1,0 +1,158 @@
+{
+    "metrics": {
+        "vus_max": {
+            "value": 20,
+            "min": 20,
+            "max": 20
+        },
+        "http_req_connecting": {
+            "avg": 0.02267465345080764,
+            "min": 0,
+            "med": 0,
+            "max": 1.79593,
+            "p(90)": 0,
+            "p(95)": 0
+        },
+        "iterations": {
+            "rate": 5.613980568077124,
+            "count": 680
+        },
+        "http_req_sending": {
+            "p(95)": 0.183949,
+            "avg": 0.0862790792951542,
+            "min": 0.010169,
+            "med": 0.047059,
+            "max": 4.022413,
+            "p(90)": 0.09008
+        },
+        "http_req_receiving": {
+            "avg": 1.0692319515418514,
+            "min": 0.032682,
+            "med": 0.688594,
+            "max": 10.720502,
+            "p(90)": 2.467079,
+            "p(95)": 3.431076
+        },
+        "vus": {
+            "value": 20,
+            "min": 20,
+            "max": 20
+        },
+        "workflow_success": {
+            "passes": 680,
+            "fails": 0,
+            "thresholds": {
+                "rate>0.99": false
+            },
+            "value": 1
+        },
+        "iteration_duration": {
+            "max": 3763.578824,
+            "p(90)": 3592.3734197000003,
+            "p(95)": 3614.4647791499997,
+            "avg": 3559.150529716173,
+            "min": 3520.298659,
+            "med": 3546.4079395
+        },
+        "checks": {
+            "passes": 2040,
+            "fails": 0,
+            "value": 1
+        },
+        "data_received": {
+            "count": 647803,
+            "rate": 5348.166844032448
+        },
+        "http_req_failed": {
+            "passes": 0,
+            "fails": 681,
+            "thresholds": {
+                "rate<0.01": false
+            },
+            "value": 0
+        },
+        "http_req_waiting": {
+            "min": 96.096046,
+            "med": 3044.480544,
+            "max": 3261.065286,
+            "p(90)": 3087.616447,
+            "p(95)": 3109.533333,
+            "avg": 3052.2489829955935
+        },
+        "data_sent": {
+            "count": 295300,
+            "rate": 2437.953620225257
+        },
+        "http_req_tls_handshaking": {
+            "max": 0,
+            "p(90)": 0,
+            "p(95)": 0,
+            "avg": 0,
+            "min": 0,
+            "med": 0
+        },
+        "http_req_duration": {
+            "p(95)": 3113.008985,
+            "avg": 3053.4044940264316,
+            "min": 101.564414,
+            "med": 3045.276073,
+            "max": 3261.943792,
+            "p(90)": 3089.101657,
+            "thresholds": {
+                "p(95)<8000": false
+            }
+        },
+        "http_req_duration{expected_response:true}": {
+            "med": 3045.276073,
+            "max": 3261.943792,
+            "p(90)": 3089.101657,
+            "p(95)": 3113.008985,
+            "avg": 3053.4044940264316,
+            "min": 101.564414
+        },
+        "http_reqs": {
+            "count": 681,
+            "rate": 5.6222364218537075
+        },
+        "http_req_blocked": {
+            "max": 1.879759,
+            "p(90)": 0.019394,
+            "p(95)": 0.031866,
+            "avg": 0.052315226138032266,
+            "min": 0.002802,
+            "med": 0.011527
+        }
+    },
+    "setup_data": {
+        "token": "eyJhbGciOiJIUzUxMiJ9.eyJzdWIiOiJhZG1pbiIsImlzcyI6ImdlbmVyaWMtb3JjaGVzdHJhdG9yIiwiaWF0IjoxNzk0NzA1NDM5LCJleHAiOjE3OTQ3MDkwMzl9.tME9RjZ4jHeKtIBOhvL4V-RU8-s6O2E5gztRlrrMCu3Csb8ezxVSibz4p5qVu-BY7ZK-RcX7-2aTOJmEC67NmQ"
+    },
+    "root_group": {
+        "path": "",
+        "id": "d41d8cd98f00b204e9800998ecf8427e",
+        "groups": {},
+        "checks": {
+                "status HTTP 200": {
+                    "fails": 0,
+                    "name": "status HTTP 200",
+                    "path": "::status HTTP 200",
+                    "id": "c5aa1eaf5f4fd3e429a3ccd252709412",
+                    "passes": 680
+                },
+                "workflow SUCCESS": {
+                    "name": "workflow SUCCESS",
+                    "path": "::workflow SUCCESS",
+                    "id": "33d3cf40fce640e6b8e0bb314103c4b1",
+                    "passes": 680,
+                    "fails": 0
+                },
+                "não é 5xx": {
+                    "path": "::não é 5xx",
+                    "id": "281b62690da7f9056546c7c0128b7638",
+                    "passes": 680,
+                    "fails": 0,
+                    "name": "não é 5xx"
+                }
+            },
+        "name": ""
+    }
+}
